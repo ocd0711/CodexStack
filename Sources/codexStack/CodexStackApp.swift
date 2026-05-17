@@ -864,7 +864,7 @@ private struct UtilizationSection: View {
         let detail = paceDetail(usedRatio: usedRatio, resetAt: resetAt, defaultWindowSeconds: defaultWindowSeconds)
         let value = displayRatio(forUsedRatio: usedRatio)
         let expected = displayRatio(forUsedRatio: detail?.expectedUsedRatio)
-        let markerUsedRatios: [Double] = [0.8, 0.9, 0.95]
+        let markerUsedRatios: [Double] = [0.5, 0.8]
         let markers = markerUsedRatios.compactMap { displayRatio(forUsedRatio: $0) }
         let percentLabel = ratioLabel(forUsedRatio: usedRatio)
 
