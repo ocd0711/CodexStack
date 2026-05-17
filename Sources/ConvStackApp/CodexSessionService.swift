@@ -18,6 +18,8 @@ struct CodexSessionService {
         self.sessionIndexURL = codexRoot.appending(path: "session_index.jsonl")
     }
 
+    var codexRootURL: URL { codexRoot }
+
     func loadSessions() throws -> [CodexSession] {
         let index = try loadIndex()
         let active = scanSessions(in: activeRoot, archived: false, index: index)

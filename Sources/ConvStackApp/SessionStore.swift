@@ -13,6 +13,7 @@ final class SessionStore: ObservableObject {
     @Published var selectedProject: String = SessionStore.allProjectsLabel
     @Published var selectedIDs: Set<String> = []
     @Published private(set) var codexRootPath: String
+    @Published private(set) var usage: UsageSnapshot = .empty
     @Published private(set) var lastError: String?
 
     init(codexRootPath: String = SessionStore.defaultCodexRootPath()) {
@@ -70,6 +71,7 @@ final class SessionStore: ObservableObject {
         do {
             try service.reconcileSessionIndex()
             sessions = try service.loadSessions()
+            usage = UsageMetricsService().loadUsageSnapshot(codexRoot: service.codexRootURL)
             selectedIDs = selectedIDs.intersection(Set(sessions.map(\.id)))
             if !projectOptions.contains(selectedProject) {
                 selectedProject = SessionStore.allProjectsLabel

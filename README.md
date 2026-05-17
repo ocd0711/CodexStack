@@ -11,6 +11,8 @@ ConvStack is a native macOS menu bar app for managing local Codex sessions.
 - Supports whole-project removal (move all project sessions to Trash)
 - Archives, unarchives, and moves sessions to Trash
 - Reconciles `session_index.jsonl` after mutations
+- Shows session/weekly subscription utilization (estimated from local logs)
+- Shows cost estimation for today and last 30 days
 - Provides a menu bar Settings window to configure Codex root directory
 
 ## Data Sources

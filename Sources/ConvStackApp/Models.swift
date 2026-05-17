@@ -14,6 +14,30 @@ enum SessionMessageRole: String, Hashable {
     case system = "System"
 }
 
+struct UsageSnapshot {
+    var updatedAt: Date?
+    var sessionUsedRatio: Double
+    var weeklyUsedRatio: Double
+    var sessionResetAt: Date?
+    var weeklyResetAt: Date?
+    var todayTokens: Int64
+    var last30DaysTokens: Int64
+    var todayCostUSD: Double
+    var last30DaysCostUSD: Double
+
+    static let empty = UsageSnapshot(
+        updatedAt: nil,
+        sessionUsedRatio: 0,
+        weeklyUsedRatio: 0,
+        sessionResetAt: nil,
+        weeklyResetAt: nil,
+        todayTokens: 0,
+        last30DaysTokens: 0,
+        todayCostUSD: 0,
+        last30DaysCostUSD: 0
+    )
+}
+
 struct SessionMessage: Identifiable, Hashable {
     let id = UUID()
     let role: SessionMessageRole
