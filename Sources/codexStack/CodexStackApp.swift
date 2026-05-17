@@ -91,6 +91,10 @@ struct CodexStackApp: App {
 }
 
 final class CodexStackAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSApplication.shared.setActivationPolicy(.accessory)
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
     }
@@ -1463,13 +1467,14 @@ private final class SettingsViewController: NSViewController {
     }
 
     private func projectLogoImage() -> NSImage {
-        if let url = Bundle.module.url(
-            forResource: "codexStack-logo",
-            withExtension: "png",
-            subdirectory: "Assets"
-        ),
-           let image = NSImage(contentsOf: url) {
-            return image
+        let candidates = [
+            Bundle.module.url(forResource: "codexStack-logo", withExtension: "png"),
+            Bundle.module.url(forResource: "codexStack-logo", withExtension: "png", subdirectory: "Assets"),
+        ]
+        for url in candidates.compactMap({ $0 }) {
+            if let image = NSImage(contentsOf: url) {
+                return image
+            }
         }
         return StatusIconRenderer.makeIcon(
             sessionUsedRatio: 0.36,
