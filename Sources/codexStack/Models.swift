@@ -115,23 +115,11 @@ struct CodexSession: Identifiable, Hashable, Sendable {
     let projectPath: String?
 
     var projectName: String {
-        guard let projectPath, !projectPath.isEmpty else { return "Unknown" }
-        if isChatWorkspace(projectPath) {
-            return "Chats"
-        }
+        guard let projectPath, !projectPath.isEmpty else { return "Chats" }
         return URL(fileURLWithPath: projectPath).lastPathComponent
     }
 
     var sizeLabel: String {
         ByteCountFormatter.string(fromByteCount: sizeInBytes, countStyle: .file)
-    }
-
-    private func isChatWorkspace(_ path: String) -> Bool {
-        let normalized = path.lowercased()
-        let codexDocsPrefix = "/users/\(NSUserName().lowercased())/documents/codex/"
-        if normalized.hasPrefix(codexDocsPrefix) {
-            return true
-        }
-        return normalized.contains("/documents/codex/")
     }
 }
