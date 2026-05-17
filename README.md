@@ -45,6 +45,15 @@ The repository also includes a standard Xcode macOS app project:
 xcodebuild -project codexStack.xcodeproj -scheme codexStack -configuration Debug build
 ```
 
+## Unsigned App Builds
+
+Builds made without a Developer ID certificate may be blocked by Gatekeeper after download.
+If macOS reports that the app cannot be verified, right-click the app and choose Open, or
+remove the quarantine attribute:
+
+```bash
+xattr -dr com.apple.quarantine /path/to/codexStack.app
+```
 
 ## Acknowledgements
 
