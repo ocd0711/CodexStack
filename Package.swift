@@ -2,17 +2,24 @@
 import PackageDescription
 
 let package = Package(
-    name: "ConvStack",
+    name: "codexStack",
+    defaultLocalization: "en",
     platforms: [
         .macOS(.v13)
     ],
     products: [
-        .executable(name: "ConvStackApp", targets: ["ConvStackApp"])
+        .executable(name: "codexStack", targets: ["codexStack"])
     ],
     targets: [
         .executableTarget(
-            name: "ConvStackApp",
-            path: "Sources/ConvStackApp"
+            name: "codexStack",
+            path: "Sources/codexStack",
+            resources: [
+                .process("Resources")
+            ],
+            linkerSettings: [
+                .linkedLibrary("sqlite3")
+            ]
         )
     ]
 )

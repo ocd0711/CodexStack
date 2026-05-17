@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 
 struct CodexSessionService {
     private let fileManager = FileManager.default
@@ -6,6 +7,7 @@ struct CodexSessionService {
     private let activeRoot: URL
     private let archivedRoot: URL
     private let sessionIndexURL: URL
+    private let stateDatabaseURL: URL
     private let idRegex = try! NSRegularExpression(
         pattern: #"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$"#,
         options: [.caseInsensitive]
@@ -16,14 +18,16 @@ struct CodexSessionService {
         self.activeRoot = codexRoot.appending(path: "sessions")
         self.archivedRoot = codexRoot.appending(path: "archived_sessions")
         self.sessionIndexURL = codexRoot.appending(path: "session_index.jsonl")
+        self.stateDatabaseURL = codexRoot.appending(path: "state_5.sqlite")
     }
 
     var codexRootURL: URL { codexRoot }
 
     func loadSessions() throws -> [CodexSession] {
         let index = try loadIndex()
-        let active = scanSessions(in: activeRoot, archived: false, index: index)
-        let archived = scanSessions(in: archivedRoot, archived: true, index: index)
+        let threads = loadThreadLookup()
+        let active = scanSessions(in: activeRoot, archived: false, index: index, threads: threads)
+        let archived = scanSessions(in: archivedRoot, archived: true, index: index, threads: threads)
         return (active + archived).sorted { $0.updatedAt > $1.updatedAt }
     }
 
@@ -65,6 +69,68 @@ struct CodexSessionService {
         }
     }
 
+    func renameSession(id: String, newTitle: String) throws {
+        let trimmedTitle = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty else {
+            throw NSError(domain: "codexStack", code: 1, userInfo: [NSLocalizedDescriptionKey: "Title cannot be empty"])
+        }
+        var changedCodexState = false
+        var changedIndex = false
+
+        if fileManager.fileExists(atPath: stateDatabaseURL.path) {
+            changedCodexState = try updateThreadTitle(id: id, title: trimmedTitle)
+        }
+
+        guard fileManager.fileExists(atPath: sessionIndexURL.path) else {
+            if changedCodexState { return }
+            throw NSError(domain: "codexStack", code: 2, userInfo: [NSLocalizedDescriptionKey: "Session title store not found"])
+        }
+
+        let original = try String(contentsOf: sessionIndexURL, encoding: .utf8)
+        let originalLines = original.split(whereSeparator: \.isNewline).map(String.init)
+        guard !originalLines.isEmpty else {
+            if changedCodexState { return }
+            throw NSError(domain: "codexStack", code: 3, userInfo: [NSLocalizedDescriptionKey: "Session not found"])
+        }
+
+        var rewrittenLines: [String] = []
+        for line in originalLines {
+            guard let data = line.data(using: .utf8),
+                  var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                rewrittenLines.append(line)
+                continue
+            }
+            guard (json["id"] as? String) == id else {
+                rewrittenLines.append(line)
+                continue
+            }
+
+            json["thread_name"] = trimmedTitle
+            if let rewrittenData = try? JSONSerialization.data(withJSONObject: json),
+               let rewritten = String(data: rewrittenData, encoding: .utf8) {
+                rewrittenLines.append(rewritten)
+                changedIndex = true
+            } else {
+                rewrittenLines.append(line)
+            }
+        }
+
+        guard changedCodexState || changedIndex else {
+            throw NSError(domain: "codexStack", code: 3, userInfo: [NSLocalizedDescriptionKey: "Session not found in index"])
+        }
+
+        guard changedIndex else { return }
+        let rewritten = rewrittenLines.joined(separator: "\n") + "\n"
+        let tempURL = codexRoot.appending(path: "session_index.jsonl.tmp")
+        try rewritten.write(to: tempURL, atomically: true, encoding: .utf8)
+        _ = try fileManager.replaceItemAt(
+            sessionIndexURL,
+            withItemAt: tempURL,
+            backupItemName: "session_index.backup-\(indexBackupSuffix()).jsonl",
+            options: []
+        )
+    }
+
     func reconcileSessionIndex() throws {
         try syncSessionIndex()
     }
@@ -93,6 +159,10 @@ struct CodexSessionService {
         return dedup(messages: results)
     }
 
+    func countConversationMessages(for session: CodexSession) -> Int {
+        loadConversationPreview(for: session, maxMessages: .max).count
+    }
+
     private func moveSessionFile(_ session: CodexSession, from sourceRoot: URL, to targetRoot: URL) throws {
         let sourcePath = session.fileURL.standardizedFileURL.path
         let sourceRootPath = sourceRoot.standardizedFileURL.path
@@ -117,7 +187,8 @@ struct CodexSessionService {
     private func scanSessions(
         in root: URL,
         archived: Bool,
-        index: [String: SessionIndexEntry]
+        index: [String: SessionIndexEntry],
+        threads: ThreadLookup
     ) -> [CodexSession] {
         guard fileManager.fileExists(atPath: root.path) else { return [] }
         guard let enumerator = fileManager.enumerator(
@@ -136,10 +207,12 @@ struct CodexSessionService {
             guard values?.isRegularFile == true else { continue }
 
             let metadata = index[sessionID]
-            let title = metadata?.threadName ?? "Untitled"
-            let updatedAt = metadata?.updatedAt ?? values?.contentModificationDate ?? .distantPast
+            let thread = threads.metadata(for: sessionID, fileURL: fileURL)
+            let fileMetadata = readSessionFileMetadata(from: fileURL)
+            let title = resolvedSessionTitle(threadTitle: thread?.title, indexTitle: metadata?.threadName)
+            let updatedAt = thread?.updatedAt ?? metadata?.updatedAt ?? values?.contentModificationDate ?? .distantPast
             let size = Int64(values?.fileSize ?? 0)
-            let projectPath = readProjectPath(from: fileURL)
+            let projectPath = normalizedText(thread?.cwd) ?? fileMetadata.projectPath
 
             results.append(
                 CodexSession(
@@ -154,6 +227,79 @@ struct CodexSessionService {
             )
         }
         return results
+    }
+
+    private func loadThreadLookup() -> ThreadLookup {
+        guard fileManager.fileExists(atPath: stateDatabaseURL.path) else { return .empty }
+
+        var database: OpaquePointer?
+        let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX
+        guard sqlite3_open_v2(stateDatabaseURL.path, &database, flags, nil) == SQLITE_OK,
+              let database else {
+            if database != nil {
+                sqlite3_close(database)
+            }
+            return .empty
+        }
+        defer { sqlite3_close(database) }
+
+        let sql = "SELECT id, rollout_path, title, cwd, updated_at FROM threads"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else {
+            return .empty
+        }
+        defer { sqlite3_finalize(statement) }
+
+        var entries: [ThreadMetadata] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let id = sqliteText(statement, 0) else { continue }
+            let rolloutPath = sqliteText(statement, 1)
+            let title = sqliteText(statement, 2)
+            let cwd = sqliteText(statement, 3)
+            let updatedAt = sqliteDateFromSeconds(statement, 4)
+            entries.append(
+                ThreadMetadata(
+                    id: id,
+                    rolloutPath: rolloutPath,
+                    title: title,
+                    cwd: cwd,
+                    updatedAt: updatedAt
+                )
+            )
+        }
+        return ThreadLookup(entries: entries)
+    }
+
+    private func updateThreadTitle(id: String, title: String) throws -> Bool {
+        var database: OpaquePointer?
+        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
+        guard sqlite3_open_v2(stateDatabaseURL.path, &database, flags, nil) == SQLITE_OK,
+              let database else {
+            defer {
+                if database != nil {
+                    sqlite3_close(database)
+                }
+            }
+            throw NSError(domain: "codexStack", code: 4, userInfo: [NSLocalizedDescriptionKey: "Could not open Codex state database"])
+        }
+        defer { sqlite3_close(database) }
+
+        let sql = "UPDATE threads SET title = ? WHERE id = ?"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else {
+            throw NSError(domain: "codexStack", code: 5, userInfo: [NSLocalizedDescriptionKey: "Could not prepare title update"])
+        }
+        defer { sqlite3_finalize(statement) }
+
+        sqlite3_bind_text(statement, 1, title, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_text(statement, 2, id, -1, SQLITE_TRANSIENT)
+
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw NSError(domain: "codexStack", code: 6, userInfo: [NSLocalizedDescriptionKey: "Could not update Codex title"])
+        }
+        return sqlite3_changes(database) > 0
     }
 
     private func extractSessionID(from fileName: String) -> String? {
@@ -260,38 +406,76 @@ struct CodexSessionService {
         return formatter.string(from: Date())
     }
 
-    private func readProjectPath(from sessionFile: URL) -> String? {
-        guard let handle = try? FileHandle(forReadingFrom: sessionFile) else { return nil }
+    private func readSessionFileMetadata(from sessionFile: URL) -> SessionFileMetadata {
+        guard let handle = try? FileHandle(forReadingFrom: sessionFile) else { return .empty }
         defer { try? handle.close() }
 
-        // Parse only the first JSONL line (session_meta), but allow a long line.
         let newline = UInt8(ascii: "\n")
-        var firstLine = Data()
-        var inspectedBytes = 0
-        let maxBytes = 1024 * 1024
+        let maxBytes = 4 * 1024 * 1024
+        let maxLines = 200
 
-        while inspectedBytes < maxBytes {
+        var buffer = Data()
+        var inspectedBytes = 0
+        var inspectedLines = 0
+        var metadata = SessionFileMetadata.empty
+
+        while inspectedBytes < maxBytes,
+              inspectedLines < maxLines,
+              metadata.projectPath == nil {
             guard let chunk = try? handle.read(upToCount: 65536), !chunk.isEmpty else {
                 break
             }
             inspectedBytes += chunk.count
+            buffer.append(chunk)
 
-            if let newlineIndex = chunk.firstIndex(of: newline) {
-                firstLine.append(chunk[..<newlineIndex])
-                break
+            while inspectedLines < maxLines,
+                  let newlineIndex = buffer.firstIndex(of: newline),
+                  metadata.projectPath == nil {
+                let line = buffer[..<newlineIndex]
+                inspectSessionLine(Data(line), metadata: &metadata)
+                buffer.removeSubrange(...newlineIndex)
+                inspectedLines += 1
             }
-            firstLine.append(chunk)
         }
 
-        guard !firstLine.isEmpty else { return nil }
-        guard let envelope = try? JSONDecoder().decode(SessionMetaEnvelope.self, from: firstLine) else {
-            return nil
+        if inspectedLines < maxLines,
+           !buffer.isEmpty,
+           metadata.projectPath == nil {
+            inspectSessionLine(buffer, metadata: &metadata)
         }
-        guard envelope.type == "session_meta" else { return nil }
-        if let cwd = envelope.payload?.cwd, !cwd.isEmpty {
-            return cwd
+
+        return metadata
+    }
+
+    private func inspectSessionLine(_ data: Data, metadata: inout SessionFileMetadata) {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+
+        if metadata.projectPath == nil,
+           (root["type"] as? String) == "session_meta",
+           let payload = root["payload"] as? [String: Any],
+           let cwd = normalizedText(payload["cwd"]) {
+            metadata.projectPath = cwd
         }
-        return nil
+
+    }
+
+    private func resolvedSessionTitle(threadTitle: String?, indexTitle: String?) -> String {
+        if let title = normalizedTitle(threadTitle), title != "Untitled" {
+            return title
+        }
+        if let title = normalizedTitle(indexTitle), title != "Untitled" {
+            return title
+        }
+        return "Untitled"
+    }
+
+    private func normalizedTitle(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let title = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+        return title.isEmpty ? nil : title
     }
 
     private func parseEventMessage(_ root: [String: Any], timestamp: Date?) -> SessionMessage? {
@@ -381,6 +565,48 @@ private struct SessionIndexEntry: Decodable {
     }
 }
 
+private struct SessionFileMetadata {
+    var projectPath: String?
+
+    static let empty = SessionFileMetadata(projectPath: nil)
+}
+
+private struct ThreadMetadata {
+    let id: String
+    let rolloutPath: String?
+    let title: String?
+    let cwd: String?
+    let updatedAt: Date?
+}
+
+private struct ThreadLookup {
+    let byID: [String: ThreadMetadata]
+    let byRolloutPath: [String: ThreadMetadata]
+
+    static let empty = ThreadLookup(entries: [])
+
+    init(entries: [ThreadMetadata]) {
+        var byID: [String: ThreadMetadata] = [:]
+        var byRolloutPath: [String: ThreadMetadata] = [:]
+        for entry in entries {
+            byID[entry.id] = entry
+            if let rolloutPath = entry.rolloutPath {
+                byRolloutPath[Self.standardizedPath(rolloutPath)] = entry
+            }
+        }
+        self.byID = byID
+        self.byRolloutPath = byRolloutPath
+    }
+
+    func metadata(for id: String, fileURL: URL) -> ThreadMetadata? {
+        byID[id] ?? byRolloutPath[Self.standardizedPath(fileURL.path)]
+    }
+
+    private static func standardizedPath(_ path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.path
+    }
+}
+
 private struct SessionMetaEnvelope: Decodable {
     let type: String
     let payload: SessionMetaPayload?
@@ -405,6 +631,21 @@ private extension JSONDecoder.DateDecodingStrategy {
             debugDescription: "Invalid ISO8601 date: \(value)"
         )
     }
+}
+
+private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+private func sqliteText(_ statement: OpaquePointer, _ index: Int32) -> String? {
+    guard let value = sqlite3_column_text(statement, index) else { return nil }
+    let text = String(cString: value)
+    return text.isEmpty ? nil : text
+}
+
+private func sqliteDateFromSeconds(_ statement: OpaquePointer, _ index: Int32) -> Date? {
+    guard sqlite3_column_type(statement, index) != SQLITE_NULL else { return nil }
+    let seconds = sqlite3_column_int64(statement, index)
+    guard seconds > 0 else { return nil }
+    return Date(timeIntervalSince1970: TimeInterval(seconds))
 }
 
 private extension ISO8601DateFormatter {
