@@ -36,6 +36,7 @@ jobs:
 
           cp ".build/release/${APP_NAME}" "${MACOS_DIR}/${APP_NAME}"
           cp "Sources/codexStack/Resources/Assets/codexStack-logo.png" "${RESOURCES_DIR}/codexStack-logo.png"
+          cp "Sources/codexStack/Resources/Assets/codexStack.icns" "${RESOURCES_DIR}/codexStack.icns"
           cp -R ".build/release/codexStack_codexStack.bundle" "${BUNDLE_DIR}/codexStack_codexStack.bundle"
 
           cat > "${CONTENTS_DIR}/Info.plist" <<'PLIST'
@@ -51,6 +52,8 @@ jobs:
             <string>codexStack</string>
             <key>CFBundleIdentifier</key>
             <string>dev.codexstack.app</string>
+            <key>CFBundleIconFile</key>
+            <string>codexStack.icns</string>
             <key>CFBundleInfoDictionaryVersion</key>
             <string>6.0</string>
             <key>CFBundleName</key>
