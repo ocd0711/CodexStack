@@ -14,6 +14,7 @@ xcuserdata/
 *.xcuserstate
 
 # App artifacts
+build/
 dist/
 *.app
 *.dSYM

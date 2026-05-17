@@ -39,6 +39,12 @@ swift run codexStack
 swift build
 ```
 
+The repository also includes a standard Xcode macOS app project:
+
+```bash
+xcodebuild -project codexStack.xcodeproj -scheme codexStack -configuration Debug build
+```
+
 
 ## Acknowledgements
 
