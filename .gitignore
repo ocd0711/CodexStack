@@ -14,9 +14,11 @@ xcuserdata/
 *.xcuserstate
 
 # App artifacts
+dist/
 *.app
 *.dSYM
 *.dSYM.zip
+*.zip
 
 # Logs and temp
 *.log
@@ -25,3 +27,6 @@ xcuserdata/
 
 # vscode
 .vscode/
+
+# About AI
+AGENTS.md
