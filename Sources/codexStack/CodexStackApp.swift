@@ -1628,30 +1628,20 @@ private struct SettingsWindowView: View {
         HStack(spacing: 12) {
             Image(nsImage: codexStackLogoImage(progressMode: progressMode))
                 .resizable()
-                .frame(width: 34, height: 34)
+                .frame(width: 32, height: 32)
             VStack(alignment: .leading, spacing: 2) {
                 Text(localized("Settings"))
-                    .font(.title2.weight(.semibold))
+                    .font(.title3.weight(.semibold))
                 Text(localized("Configure codexStack and Codex session sources."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Text("codexStack")
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 18)
-                .frame(height: 32)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .stroke(Color.secondary.opacity(0.22), lineWidth: 1)
-                }
         }
         .padding(.horizontal, 18)
         .padding(.top, 16)
         .padding(.bottom, 14)
-        .background(.regularMaterial)
+        .background(Color.clear)
         .overlay(alignment: .bottom) {
             Divider()
         }
@@ -1917,31 +1907,19 @@ private struct SettingsWindowView: View {
 
     private func settingsCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         VStack(spacing: 0, content: content)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .background(settingsCardTint, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.secondary.opacity(0.12), lineWidth: 0.5)
             }
-            .shadow(color: .black.opacity(0.08), radius: 18, y: 8)
     }
 
     private var settingsWindowBackground: some View {
-        ZStack {
-            Rectangle().fill(.regularMaterial)
-            Color(nsColor: .windowBackgroundColor).opacity(0.28)
-        }
+        Rectangle().fill(.ultraThinMaterial)
     }
 
     private var settingsSidebarBackground: some View {
-        ZStack {
-            Rectangle().fill(.ultraThinMaterial)
-            Color(nsColor: .controlBackgroundColor).opacity(0.18)
-        }
-    }
-
-    private var settingsCardTint: some ShapeStyle {
-        Color(nsColor: .controlBackgroundColor).opacity(0.34)
+        Color.clear
     }
 
     private func sectionTitle(_ key: String) -> some View {
