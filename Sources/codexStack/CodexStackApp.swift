@@ -1972,6 +1972,7 @@ private struct SettingsWindowView: View {
                     persistManualOrder(currentSortedIDs())
                 }
                 accountsSortRaw = newValue.rawValue
+                onAccountsChanged()
             }
         )
     }
@@ -2008,6 +2009,7 @@ private struct SettingsWindowView: View {
         if accountsSortOption != .manual {
             accountsSortRaw = AccountsSortOption.manual.rawValue
         }
+        onAccountsChanged()
     }
 
     private func appendNewAccountsToManualOrder() {
