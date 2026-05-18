@@ -21,9 +21,11 @@
 		A1B2C3D4E5F6000000000112 /* codexStack-logo.png in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000000000212 /* codexStack-logo.png */; };
 		A1B2C3D4E5F6000000000113 /* codexStack.icns in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000000000213 /* codexStack.icns */; };
 		A1B2C3D4E5F6000000000114 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000000000214 /* Localizable.strings */; };
+		E8EF8F1B8120DE57A0CE03E8 /* ProviderSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5116A032EB39475B1D13FD79 /* ProviderSyncService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		5116A032EB39475B1D13FD79 /* ProviderSyncService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ProviderSyncService.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000000000001 /* codexStack.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = codexStack.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1B2C3D4E5F6000000000201 /* CodexStackApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexStackApp.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000000000202 /* MainWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowView.swift; sourceTree = "<group>"; };
@@ -37,7 +39,7 @@
 		A1B2C3D4E5F600000000020A /* ResetCelebration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResetCelebration.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000000000210 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000000000211 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		A1B2C3D4E5F6000000000212 /* codexStack-logo.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = Assets/codexStack-logo.png; sourceTree = "<group>"; };
+		A1B2C3D4E5F6000000000212 /* codexStack-logo.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Assets/codexStack-logo.png"; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000000000213 /* codexStack.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = Assets/codexStack.icns; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000000000215 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000000000216 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
@@ -101,6 +103,7 @@
 				A1B2C3D4E5F6000000000209 /* AccountCredentialStore.swift */,
 				A1B2C3D4E5F600000000020A /* ResetCelebration.swift */,
 				A1B2C3D4E5F6000000000406 /* Resources */,
+				5116A032EB39475B1D13FD79 /* ProviderSyncService.swift */,
 			);
 			path = codexStack;
 			sourceTree = "<group>";
@@ -199,6 +202,7 @@
 				A1B2C3D4E5F6000000000108 /* BundleModule.swift in Sources */,
 				A1B2C3D4E5F6000000000109 /* AccountCredentialStore.swift in Sources */,
 				A1B2C3D4E5F600000000010A /* ResetCelebration.swift in Sources */,
+				E8EF8F1B8120DE57A0CE03E8 /* ProviderSyncService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -343,7 +347,10 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = App/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
 				MARKETING_VERSION = 0.1.0;
 				OTHER_LDFLAGS = "-lsqlite3";
 				PRODUCT_BUNDLE_IDENTIFIER = dev.codexstack.app;
@@ -363,7 +370,10 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = App/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
 				MARKETING_VERSION = 0.1.0;
 				OTHER_LDFLAGS = "-lsqlite3";
 				PRODUCT_BUNDLE_IDENTIFIER = dev.codexstack.app;

@@ -230,7 +230,9 @@ struct UsageMetricsService {
 
     private func loadUsageProfile(usageURL: URL, credentials: OAuthCredentials) -> AccountUsageProfile? {
         guard !credentials.disabled else { return nil }
-        let response = credentials.isExpired ? nil : fetchCodexUsage(usageURL: usageURL, credentials: credentials)
+        let fetchResult = credentials.isExpired ? (nil, true) : fetchCodexUsage(usageURL: usageURL, credentials: credentials)
+        let response = fetchResult.0
+        let isUnauthorized = fetchResult.1 || credentials.isExpired
 
         let jwtPayload = credentials.idToken.flatMap(parseJWT)
         let accessPayload = parseJWT(credentials.accessToken)
@@ -271,7 +273,7 @@ struct UsageMetricsService {
             expiresAt: credentials.expiresAt,
             importedAt: credentials.importedAt,
             isCurrentCodexAccount: credentials.isCurrentCodexAccount,
-            isCredentialExpired: credentials.isExpired
+            isCredentialExpired: isUnauthorized
         )
 
         if profile.accountEmail == nil &&
@@ -355,6 +357,15 @@ struct UsageMetricsService {
             default: return nil
             }
         }()
+        
+        let isExpired: Bool
+        if existing.source == .cached {
+            isExpired = incoming.isCredentialExpired
+        } else if incoming.source == .cached {
+            isExpired = existing.isCredentialExpired
+        } else {
+            isExpired = existing.isCredentialExpired && incoming.isCredentialExpired
+        }
 
         return AccountUsageProfile(
             id: winner.accountID ?? loser.accountID ?? winner.accountEmail ?? loser.accountEmail ?? winner.id,
@@ -372,7 +383,7 @@ struct UsageMetricsService {
             expiresAt: winner.expiresAt ?? loser.expiresAt,
             importedAt: winner.importedAt ?? loser.importedAt,
             isCurrentCodexAccount: winner.isCurrentCodexAccount || loser.isCurrentCodexAccount,
-            isCredentialExpired: winner.isCredentialExpired && loser.isCredentialExpired
+            isCredentialExpired: isExpired
         )
     }
 
@@ -389,8 +400,8 @@ struct UsageMetricsService {
             note: profile.note,
             planType: profile.planType,
             source: profile.source,
-            sessionUsedRatio: profile.primaryUsedRatio,
-            weeklyUsedRatio: profile.secondaryUsedRatio,
+            sessionUsedRatio: profile.isCredentialExpired ? nil : profile.primaryUsedRatio,
+            weeklyUsedRatio: profile.isCredentialExpired ? nil : profile.secondaryUsedRatio,
             sessionResetAt: profile.primaryResetAt,
             weeklyResetAt: profile.secondaryResetAt,
             updatedAt: profile.updatedAt,
@@ -447,7 +458,7 @@ struct UsageMetricsService {
         return nil
     }
 
-    private func fetchCodexUsage(usageURL: URL, credentials: OAuthCredentials) -> CodexUsageAPIResponse? {
+    private func fetchCodexUsage(usageURL: URL, credentials: OAuthCredentials) -> (CodexUsageAPIResponse?, Bool) {
         var request = URLRequest(url: usageURL)
         request.httpMethod = "GET"
         request.timeoutInterval = 2.5
@@ -466,11 +477,15 @@ struct UsageMetricsService {
 
         let semaphore = DispatchSemaphore(value: 0)
         var decoded: CodexUsageAPIResponse?
+        var isUnauthorized = false
         let task = session.dataTask(with: request) { data, response, _ in
             defer { semaphore.signal() }
-            guard let http = response as? HTTPURLResponse,
-                  (200...299).contains(http.statusCode),
-                  let data else {
+            guard let http = response as? HTTPURLResponse else { return }
+            if http.statusCode == 401 || http.statusCode == 403 {
+                isUnauthorized = true
+                return
+            }
+            guard (200...299).contains(http.statusCode), let data else {
                 return
             }
             decoded = try? JSONDecoder().decode(CodexUsageAPIResponse.self, from: data)
@@ -480,9 +495,9 @@ struct UsageMetricsService {
         let waitResult = semaphore.wait(timeout: .now() + 2.8)
         if waitResult == .timedOut {
             task.cancel()
-            return nil
+            return (nil, false)
         }
-        return decoded
+        return (decoded, isUnauthorized)
     }
 
     private func loadOAuthCredentials(codexRoot: URL) -> [OAuthCredentials] {

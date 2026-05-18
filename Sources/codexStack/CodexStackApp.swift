@@ -238,8 +238,18 @@ private struct MenuBarPanel: View {
     private var header: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Codex")
-                    .font(.title3.weight(.semibold))
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Codex")
+                        .font(.title3.weight(.semibold))
+                    if let activeProvider = store.activeProvider {
+                        Text(activeProvider)
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.blue.opacity(0.8), in: Capsule())
+                    }
+                }
                 accountSwitcher
                 if let updatedAt = store.usage.updatedAt {
                     Text("\(store.usage.source.label) · Updated \(updatedAt.formatted(.relative(presentation: .named)))")
@@ -295,6 +305,53 @@ private struct MenuBarPanel: View {
                 }
             } label: {
                 Label("Sync to auth.json", systemImage: "arrow.triangle.2.circlepath")
+            }
+            Button {
+                let syncService = ProviderSyncService(codexRoot: URL(fileURLWithPath: store.codexRootPath, isDirectory: true))
+                if let count = try? syncService.sync() {
+                    print("Synced \(count) sessions")
+                } else {
+                    NSSound.beep()
+                }
+            } label: {
+                Label("Sync Sessions Metadata", systemImage: "doc.badge.gearshape")
+            }
+            Menu {
+                Button {
+                    do {
+                        try store.applyConfigProvider(nil as String?)
+                    } catch {
+                        NSSound.beep()
+                    }
+                } label: {
+                    if store.activeProvider == nil {
+                        Label("Official Login", systemImage: "checkmark")
+                    } else {
+                        Text("Official Login")
+                    }
+                }
+                Divider()
+                if store.availableProviders.isEmpty {
+                    Text("No custom providers found")
+                } else {
+                    ForEach(store.availableProviders, id: \.self) { provider in
+                        Button {
+                            do {
+                                try store.applyConfigProvider(provider)
+                            } catch {
+                                NSSound.beep()
+                            }
+                        } label: {
+                            if store.activeProvider == provider {
+                                Label(provider, systemImage: "checkmark")
+                            } else {
+                                Text(provider)
+                            }
+                        }
+                    }
+                }
+            } label: {
+                Label("Provider Mode", systemImage: "network")
             }
         } label: {
             HStack(spacing: 4) {
@@ -1642,6 +1699,26 @@ private struct SettingsWindowView: View {
     let onAccountsChanged: () -> Void
     let onAutoSwitchChanged: (Bool, Double, Double, Bool) -> Void
 
+    @State private var isOfficialLogin: Bool
+
+    private func checkOfficialLogin() {
+        let codexRoot = URL(fileURLWithPath: NSString(string: currentPath).expandingTildeInPath, isDirectory: true)
+        let configURL = codexRoot.appendingPathComponent("config.toml")
+        guard FileManager.default.fileExists(atPath: configURL.path),
+              let content = try? String(contentsOf: configURL, encoding: .utf8) else {
+            isOfficialLogin = true
+            return
+        }
+        for line in content.split(whereSeparator: \.isNewline) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("model_provider") {
+                isOfficialLogin = false
+                return
+            }
+        }
+        isOfficialLogin = true
+    }
+
     init(
         currentPath: String,
         currentProgressMode: UtilizationProgressMode,
@@ -1674,6 +1751,19 @@ private struct SettingsWindowView: View {
         self.onCelebrationChanged = onCelebrationChanged
         self.onAccountsChanged = onAccountsChanged
         self.onAutoSwitchChanged = onAutoSwitchChanged
+
+        let codexRoot = URL(fileURLWithPath: NSString(string: currentPath).expandingTildeInPath, isDirectory: true)
+        let configURL = codexRoot.appendingPathComponent("config.toml")
+        var official = true
+        if let content = try? String(contentsOf: configURL, encoding: .utf8) {
+            for line in content.split(whereSeparator: \.isNewline) {
+                if line.trimmingCharacters(in: .whitespaces).hasPrefix("model_provider") {
+                    official = false
+                    break
+                }
+            }
+        }
+        _isOfficialLogin = State(initialValue: official)
     }
 
     var body: some View {
@@ -1704,6 +1794,9 @@ private struct SettingsWindowView: View {
                 message: Text(alert.message),
                 dismissButton: .default(Text("OK"))
             )
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("CodexConfigProviderChanged"))) { _ in
+            checkOfficialLogin()
         }
     }
 
@@ -1907,53 +2000,71 @@ private struct SettingsWindowView: View {
                         }
                     }
                     SettingsDivider()
-                    SettingsLine(
-                        title: localized("Auto-Switch Accounts"),
-                        subtitle: localized("Automatically switch to the account with the lowest usage when the current account reaches a specified percentage limit.")
-                    ) {
-                        SettingsSwitch(isOn: $autoSwitchEnabled) {
-                            onAutoSwitchChanged(autoSwitchEnabled, autoSwitchSessionThreshold, autoSwitchWeeklyThreshold, autoSwitchNotificationEnabled)
+                    if !isOfficialLogin {
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.yellow)
+                            Text(localized("Auto-Switch is disabled because a custom provider is active."))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer()
                         }
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 16)
+                        .background(Color.yellow.opacity(0.1))
+                        SettingsDivider()
                     }
-                    if autoSwitchEnabled {
-                        SettingsDivider()
+                    Group {
                         SettingsLine(
-                            title: localized("Session Limit Threshold"),
-                            subtitle: localized("Switch when the current account's 5h session limit reaches this percentage.")
+                            title: localized("Auto-Switch Accounts"),
+                            subtitle: localized("Automatically switch to the account with the lowest usage when the current account reaches a specified percentage limit.")
                         ) {
-                            HStack {
-                                Slider(value: $autoSwitchSessionThreshold, in: 1...100) { _ in
-                                    onAutoSwitchChanged(autoSwitchEnabled, autoSwitchSessionThreshold, autoSwitchWeeklyThreshold, autoSwitchNotificationEnabled)
-                                }
-                                .frame(width: 150)
-                                Text("\(Int(autoSwitchSessionThreshold))%")
-                                    .frame(width: 40, alignment: .trailing)
-                            }
-                        }
-                        SettingsDivider()
-                        SettingsLine(
-                            title: localized("Weekly Limit Threshold"),
-                            subtitle: localized("Switch when the current account's weekly limit reaches this percentage.")
-                        ) {
-                            HStack {
-                                Slider(value: $autoSwitchWeeklyThreshold, in: 1...100) { _ in
-                                    onAutoSwitchChanged(autoSwitchEnabled, autoSwitchSessionThreshold, autoSwitchWeeklyThreshold, autoSwitchNotificationEnabled)
-                                }
-                                .frame(width: 150)
-                                Text("\(Int(autoSwitchWeeklyThreshold))%")
-                                    .frame(width: 40, alignment: .trailing)
-                            }
-                        }
-                        SettingsDivider()
-                        SettingsLine(
-                            title: localized("Auto-Switch Notifications"),
-                            subtitle: localized("Show a macOS notification when an automatic switch occurs.")
-                        ) {
-                            SettingsSwitch(isOn: $autoSwitchNotificationEnabled) {
+                            SettingsSwitch(isOn: $autoSwitchEnabled) {
                                 onAutoSwitchChanged(autoSwitchEnabled, autoSwitchSessionThreshold, autoSwitchWeeklyThreshold, autoSwitchNotificationEnabled)
                             }
                         }
+                        if autoSwitchEnabled {
+                            SettingsDivider()
+                            SettingsLine(
+                                title: localized("Session Limit Threshold"),
+                                subtitle: localized("Switch when the current account's 5h session limit reaches this percentage.")
+                            ) {
+                                HStack {
+                                    Slider(value: $autoSwitchSessionThreshold, in: 1...100) { _ in
+                                        onAutoSwitchChanged(autoSwitchEnabled, autoSwitchSessionThreshold, autoSwitchWeeklyThreshold, autoSwitchNotificationEnabled)
+                                    }
+                                    .frame(width: 150)
+                                    Text("\(Int(autoSwitchSessionThreshold))%")
+                                        .frame(width: 40, alignment: .trailing)
+                                }
+                            }
+                            SettingsDivider()
+                            SettingsLine(
+                                title: localized("Weekly Limit Threshold"),
+                                subtitle: localized("Switch when the current account's weekly limit reaches this percentage.")
+                            ) {
+                                HStack {
+                                    Slider(value: $autoSwitchWeeklyThreshold, in: 1...100) { _ in
+                                        onAutoSwitchChanged(autoSwitchEnabled, autoSwitchSessionThreshold, autoSwitchWeeklyThreshold, autoSwitchNotificationEnabled)
+                                    }
+                                    .frame(width: 150)
+                                    Text("\(Int(autoSwitchWeeklyThreshold))%")
+                                        .frame(width: 40, alignment: .trailing)
+                                }
+                            }
+                            SettingsDivider()
+                            SettingsLine(
+                                title: localized("Auto-Switch Notifications"),
+                                subtitle: localized("Show a macOS notification when an automatic switch occurs.")
+                            ) {
+                                SettingsSwitch(isOn: $autoSwitchNotificationEnabled) {
+                                    onAutoSwitchChanged(autoSwitchEnabled, autoSwitchSessionThreshold, autoSwitchWeeklyThreshold, autoSwitchNotificationEnabled)
+                                }
+                            }
+                        }
                     }
+                    .disabled(!isOfficialLogin)
+                    .opacity(isOfficialLogin ? 1.0 : 0.5)
                     SettingsDivider()
                     VStack(spacing: 0) {
                         let rows = sortedImportedAccounts
@@ -2099,6 +2210,9 @@ private struct SettingsWindowView: View {
             Menu {
                 Button(localized("Sync to Codex (auth.json)")) {
                     syncToAuthJSON(id: account.id)
+                }
+                Button(localized("Sync Sessions Metadata")) {
+                    syncSessionsMetadata()
                 }
                 Button(localized("Export Configuration...")) {
                     exportAccount(id: account.id)
@@ -2286,6 +2400,23 @@ private struct SettingsWindowView: View {
         } catch {
             accountAlert = UpdateAlert(
                 title: localized("Export Failed"),
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    private func syncSessionsMetadata() {
+        let codexRoot = URL(fileURLWithPath: NSString(string: currentPath).expandingTildeInPath, isDirectory: true)
+        let syncService = ProviderSyncService(codexRoot: codexRoot)
+        do {
+            let count = try syncService.sync()
+            accountAlert = UpdateAlert(
+                title: localized("Sync Complete"),
+                message: localized("Synchronized \(count) session(s) metadata successfully. You may need to restart Codex for changes to take full effect.")
+            )
+        } catch {
+            accountAlert = UpdateAlert(
+                title: localized("Sync Failed"),
                 message: error.localizedDescription
             )
         }

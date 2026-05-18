@@ -39,6 +39,10 @@ final class SessionStore: ObservableObject {
     static let celebrateWeeklyResetDefaultsKey = "celebrateWeeklyReset"
     private static let lastSessionResetSeenKey = "lastSessionResetSeen"
     private static let lastWeeklyResetSeenKey = "lastWeeklyResetSeen"
+    
+    @Published var activeProvider: String? = nil
+    @Published var availableProviders: [String] = []
+    
     var onResetCelebration: ((ResetCelebrationKind) -> Void)?
     var onAutoSwitchPerformed: ((String) -> Void)?
     @Published private(set) var isRefreshing = false
@@ -160,6 +164,7 @@ final class SessionStore: ObservableObject {
     func refresh() {
         guard refreshTask == nil else { return }
         isRefreshing = true
+        loadConfigProviders()
         let rootPath = expandedPath(codexRootPath)
         let preferredID = preferredAccountID
 
@@ -192,6 +197,7 @@ final class SessionStore: ObservableObject {
 
     private func performAutoSwitchIfNeeded(for newUsage: UsageSnapshot) {
         guard autoSwitchEnabled else { return }
+        guard activeProvider == nil else { return }
         
         let currentID = preferredAccountID ?? newUsage.accounts.first?.id
         guard let currentAccount = newUsage.accounts.first(where: { $0.id == currentID }) else { return }
@@ -589,6 +595,88 @@ final class SessionStore: ObservableObject {
         } catch {
             return .failure(error.localizedDescription)
         }
+    }
+
+    private func loadConfigProviders() {
+        let codexRoot = URL(fileURLWithPath: expandedPath(codexRootPath), isDirectory: true)
+        let configURL = codexRoot.appending(path: "config.toml")
+        guard FileManager.default.fileExists(atPath: configURL.path),
+              let content = try? String(contentsOf: configURL, encoding: .utf8) else {
+            return
+        }
+        
+        var currentActive: String? = nil
+        var providers: [String] = []
+        
+        for line in content.split(whereSeparator: \.isNewline) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("model_provider"), let equalsRange = trimmed.range(of: "=") {
+                var value = String(trimmed[equalsRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+                if value.hasPrefix("\"") && value.hasSuffix("\"") {
+                    value = String(value.dropFirst().dropLast())
+                }
+                currentActive = value
+            } else if trimmed.hasPrefix("[model_providers.") {
+                let name = trimmed.replacingOccurrences(of: "[model_providers.", with: "").replacingOccurrences(of: "]", with: "")
+                if !name.isEmpty && !providers.contains(name) {
+                    providers.append(name)
+                }
+            }
+        }
+        
+        DispatchQueue.main.async {
+            self.activeProvider = currentActive
+            self.availableProviders = providers
+        }
+    }
+
+    private func syncConfigProvider(accountType: String?, codexRoot: URL) {
+        let configURL = codexRoot.appending(path: "config.toml")
+        guard FileManager.default.fileExists(atPath: configURL.path),
+              let content = try? String(contentsOf: configURL, encoding: .utf8) else {
+            return
+        }
+        
+        let targetProvider = (accountType == nil || accountType == "codex" || accountType == "chatgpt") ? nil : accountType!
+        
+        var lines = content.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var found = false
+        for (i, line) in lines.enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("model_provider") || trimmed.hasPrefix("#model_provider") || trimmed.hasPrefix("# model_provider") {
+                if let target = targetProvider {
+                    lines[i] = "model_provider = \"\(target)\""
+                } else {
+                    if !trimmed.hasPrefix("#") {
+                        lines[i] = "#\(line)"
+                    }
+                }
+                found = true
+                break
+            }
+        }
+        
+        if !found, let target = targetProvider {
+            if let firstModelIndex = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("model ") || $0.trimmingCharacters(in: .whitespaces).hasPrefix("model=") }) {
+                lines.insert("model_provider = \"\(target)\"", at: firstModelIndex + 1)
+            } else {
+                lines.insert("model_provider = \"\(target)\"", at: 0)
+            }
+        }
+        
+        try? lines.joined(separator: "\n").write(to: configURL, atomically: true, encoding: .utf8)
+    }
+
+    func applyConfigProvider(_ targetProvider: String?) throws {
+        let codexRoot = URL(fileURLWithPath: expandedPath(codexRootPath), isDirectory: true)
+        syncConfigProvider(accountType: targetProvider, codexRoot: codexRoot)
+        let syncService = ProviderSyncService(codexRoot: codexRoot)
+        _ = try? syncService.sync()
+        loadConfigProviders()
+        Task { @MainActor in
+            self.refresh()
+        }
+        NotificationCenter.default.post(name: NSNotification.Name("CodexConfigProviderChanged"), object: nil)
     }
 }
 
