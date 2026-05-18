@@ -1779,6 +1779,7 @@ private struct SettingsWindowView: View {
             .frame(maxWidth: .infinity, alignment: .center)
         }
         .scrollContentBackground(.hidden)
+        .clipped()
     }
 
     private var generalPane: some View {
