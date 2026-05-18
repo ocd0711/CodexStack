@@ -642,7 +642,12 @@ private struct MenuBarPanel: View {
     }
 
     private var recentProjectLabels: [String] {
-        groupedProjects().prefix(3).map { "\($0.projectName) · \($0.sessions.count)" }
+        let groups = groupedProjects()
+        let labels = groups.prefix(8).map { "\($0.projectName) · \($0.sessions.count)" }
+        if groups.count > 8 {
+            return labels + ["... \((groups.count - 8)) more"]
+        }
+        return labels
     }
 
     private var projectsPopoverWidth: CGFloat {
