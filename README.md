@@ -16,6 +16,9 @@ codexStack is a native macOS menu bar app for managing local Codex sessions.
 - Reads Codex session titles from `state_5.sqlite`
 - Shows session/weekly subscription utilization
 - Shows cost estimation for today and last 30 days
+- Manage multiple Codex accounts (import, reorder, remove, and export to Codex or cliproxyapi JSON formats)
+- Configurable Auto-Switch feature: automatically switches to the account with the lowest usage when the current account hits customizable Session (e.g. 5h) or Weekly usage percentage limits, with optional macOS notifications
+- Two-way account sync: manual or automatic syncing to `~/.codex/auth.json` to seamlessly swap active accounts
 - Provides a menu bar Settings window for display options and Codex root directory
 
 ## Data Sources
