@@ -152,3 +152,17 @@ struct CodexSession: Identifiable, Hashable, Sendable {
         ByteCountFormatter.string(fromByteCount: sizeInBytes, countStyle: .file)
     }
 }
+
+struct ProjectMoveTarget: Identifiable, Hashable, Sendable {
+    let id: String
+    let name: String
+    let path: String?
+
+    static let chats = ProjectMoveTarget(name: "Chats", path: nil)
+
+    init(name: String, path: String?) {
+        self.name = name
+        self.path = path
+        self.id = path ?? "chats"
+    }
+}

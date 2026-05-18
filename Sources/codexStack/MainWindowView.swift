@@ -6,6 +6,7 @@ struct MainWindowView: View {
     @State private var showProjectTrashConfirm = false
     @State private var pendingProjectName: String?
     @State private var expandedProjects: Set<String> = []
+    @State private var movePrompt: MoveProjectPrompt?
 
     private var selectedSession: CodexSession? {
         store.selectedSessions.first
@@ -25,6 +26,10 @@ struct MainWindowView: View {
 
     private var canRename: Bool {
         selectedSession != nil && !store.isMutating
+    }
+
+    private var canMove: Bool {
+        !store.selectedSessions.isEmpty && !store.isMutating && !store.projectMoveTargets.isEmpty
     }
 
     private var groupedSessions: [ProjectSessionGroup] {
@@ -56,6 +61,11 @@ struct MainWindowView: View {
         }
         .frame(minWidth: 980, minHeight: 620)
         .background(.regularMaterial)
+        .overlay {
+            if store.isMutating, let message = store.mutationMessage {
+                MutationOverlay(message: message)
+            }
+        }
         .confirmationDialog(
             "Move selected session files to Trash?",
             isPresented: $showTrashConfirm,
@@ -96,6 +106,19 @@ struct MainWindowView: View {
         }, message: {
             Text(store.lastError ?? "")
         })
+        .sheet(item: $movePrompt) { prompt in
+            MoveProjectSheet(prompt: prompt) { target in
+                movePrompt = nil
+                switch prompt.mode {
+                case let .single(sessionID):
+                    store.moveSession(id: sessionID, to: target)
+                case .selected:
+                    store.moveSelected(to: target)
+                }
+            } onCancel: {
+                movePrompt = nil
+            }
+        }
         .onAppear {
             if store.sessions.isEmpty {
                 store.refresh()
@@ -110,6 +133,9 @@ struct MainWindowView: View {
             for id in idSet where !expandedProjects.contains(id) {
                 expandedProjects.insert(id)
             }
+        }
+        .onChange(of: store.scope) { _ in
+            store.clearSelection()
         }
     }
 
@@ -170,6 +196,13 @@ struct MainWindowView: View {
                     Label("Unarchive", systemImage: "tray.and.arrow.up")
                 }
                 .disabled(!canUnarchive || store.isMutating)
+
+                Button {
+                    openMoveSelected()
+                } label: {
+                    Label("Move...", systemImage: "folder")
+                }
+                .disabled(!canMove)
 
                 Button(role: .destructive) {
                     showTrashConfirm = true
@@ -281,6 +314,10 @@ struct MainWindowView: View {
             Button("Rename...") {
                 openRename(for: session)
             }
+            Button("Move to Project...") {
+                openMove(for: session)
+            }
+            .disabled(moveTargets(for: session).isEmpty)
             Button(session.isArchived ? "Unarchive" : "Archive") {
                 if session.isArchived {
                     store.unarchiveSession(id: session.id)
@@ -317,6 +354,21 @@ struct MainWindowView: View {
             store.renameSession(id: session.id, newTitle: newTitle)
         }
     }
+
+    private func openMove(for session: CodexSession) {
+        let targets = moveTargets(for: session)
+        guard !targets.isEmpty else { return }
+        movePrompt = MoveProjectPrompt(mode: .single(session.id), targets: targets)
+    }
+
+    private func openMoveSelected() {
+        guard !store.projectMoveTargets.isEmpty else { return }
+        movePrompt = MoveProjectPrompt(mode: .selected, targets: store.projectMoveTargets)
+    }
+
+    private func moveTargets(for session: CodexSession) -> [ProjectMoveTarget] {
+        store.projectMoveTargets.filter { $0.path != session.projectPath }
+    }
 }
 
 private struct ProjectSessionGroup: Identifiable {
@@ -324,6 +376,108 @@ private struct ProjectSessionGroup: Identifiable {
     let name: String
     let sessions: [CodexSession]
     let latest: Date
+}
+
+private struct MoveProjectPrompt: Identifiable {
+    enum Mode {
+        case single(String)
+        case selected
+    }
+
+    let id = UUID()
+    let mode: Mode
+    let targets: [ProjectMoveTarget]
+}
+
+private struct MoveProjectSheet: View {
+    let prompt: MoveProjectPrompt
+    let onMove: (ProjectMoveTarget) -> Void
+    let onCancel: () -> Void
+    @State private var selectedTargetID: String
+
+    init(
+        prompt: MoveProjectPrompt,
+        onMove: @escaping (ProjectMoveTarget) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.prompt = prompt
+        self.onMove = onMove
+        self.onCancel = onCancel
+        _selectedTargetID = State(initialValue: prompt.targets.first?.id ?? "")
+    }
+
+    private var selectedTarget: ProjectMoveTarget? {
+        prompt.targets.first { $0.id == selectedTargetID }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Move to Project")
+                    .font(.title3.weight(.semibold))
+                Text("Choose destination project")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            Picker("Project", selection: $selectedTargetID) {
+                ForEach(prompt.targets) { target in
+                    VStack(alignment: .leading) {
+                        Text(target.name)
+                        if let path = target.path {
+                            Text(path)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .tag(target.id)
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                Button("Move") {
+                    if let selectedTarget {
+                        onMove(selectedTarget)
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(selectedTarget == nil)
+            }
+        }
+        .padding(22)
+        .frame(width: 420)
+        .background(.regularMaterial)
+    }
+}
+
+private struct MutationOverlay: View {
+    let message: String
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(.regularMaterial)
+                .opacity(0.72)
+            VStack(spacing: 10) {
+                ProgressView()
+                    .controlSize(.large)
+                Text(message)
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 22)
+            .padding(.vertical, 18)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.secondary.opacity(0.16), lineWidth: 1)
+            }
+        }
+    }
 }
 
 private struct ProjectHeaderRow: View {

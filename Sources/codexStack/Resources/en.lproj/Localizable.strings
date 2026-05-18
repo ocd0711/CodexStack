@@ -97,6 +97,11 @@
 "Search title or session id" = "Search title or session id";
 "Scope" = "Scope";
 "Move to Trash" = "Move to Trash";
+"Move..." = "Move...";
+"Move" = "Move";
+"Move to Project..." = "Move to Project...";
+"Move to Project" = "Move to Project";
+"Choose destination project" = "Choose destination project";
 "Rename" = "Rename";
 "Operation Failed" = "Operation Failed";
 "Move selected session files to Trash?" = "Move selected session files to Trash?";
@@ -132,3 +137,4 @@
 "mutation.trashing" = "Moving to Trash...";
 "mutation.removing_project" = "Removing Project...";
 "mutation.renaming" = "Renaming...";
+"mutation.moving" = "Moving...";

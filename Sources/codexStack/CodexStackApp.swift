@@ -473,6 +473,12 @@ private struct MenuBarPanel: View {
                                                     store.renameSession(id: session.id, newTitle: newTitle)
                                                 }
                                             }
+                                            Button("Move to Project...") {
+                                                if let target = DialogPresenter.promptMoveProject(targets: moveTargets(for: session)) {
+                                                    store.moveSession(id: session.id, to: target)
+                                                }
+                                            }
+                                            .disabled(moveTargets(for: session).isEmpty)
                                             Button("Delete Conversation...", role: .destructive) {
                                                 confirmSessionDeletion(session: session)
                                             }
@@ -642,6 +648,10 @@ private struct MenuBarPanel: View {
         ) {
             store.trashSession(id: session.id)
         }
+    }
+
+    private func moveTargets(for session: CodexSession) -> [ProjectMoveTarget] {
+        store.projectMoveTargets.filter { $0.path != session.projectPath }
     }
 
     private func scheduleClosePaneIfNeeded() {
@@ -1860,6 +1870,7 @@ enum DialogPresenter {
         alert.addButton(withTitle: buttonTitle)
         alert.addButton(withTitle: NSLocalizedString("Cancel", bundle: .module, comment: ""))
         NSApplication.shared.activate(ignoringOtherApps: true)
+        centerAlertOnActiveScreen(alert)
         return alert.runModal() == .alertFirstButtonReturn
     }
 
@@ -1877,10 +1888,59 @@ enum DialogPresenter {
         alert.accessoryView = field
 
         NSApplication.shared.activate(ignoringOtherApps: true)
+        centerAlertOnActiveScreen(alert)
         let result = alert.runModal()
         guard result == .alertFirstButtonReturn else { return nil }
 
         let trimmed = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func promptMoveProject(targets: [ProjectMoveTarget]) -> ProjectMoveTarget? {
+        guard !targets.isEmpty else { return nil }
+
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = NSLocalizedString("Move to Project", bundle: .module, comment: "")
+        alert.informativeText = NSLocalizedString("Choose destination project", bundle: .module, comment: "")
+        alert.addButton(withTitle: NSLocalizedString("Move", bundle: .module, comment: ""))
+        alert.addButton(withTitle: NSLocalizedString("Cancel", bundle: .module, comment: ""))
+
+        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 360, height: 28), pullsDown: false)
+        for target in targets {
+            popup.addItem(withTitle: projectTargetLabel(target))
+        }
+        popup.selectItem(at: 0)
+        alert.accessoryView = popup
+
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        centerAlertOnActiveScreen(alert)
+        let result = alert.runModal()
+        guard result == .alertFirstButtonReturn else { return nil }
+        let index = popup.indexOfSelectedItem
+        guard targets.indices.contains(index) else { return nil }
+        return targets[index]
+    }
+
+    private static func projectTargetLabel(_ target: ProjectMoveTarget) -> String {
+        guard let path = target.path else { return target.name }
+        return "\(target.name)  \(path)"
+    }
+
+    private static func centerAlertOnActiveScreen(_ alert: NSAlert) {
+        guard let screen = NSApplication.shared.keyWindow?.screen
+            ?? NSApplication.shared.mainWindow?.screen
+            ?? NSScreen.main else {
+            return
+        }
+        let alertWindow = alert.window
+        let frame = alertWindow.frame
+        let visibleFrame = screen.visibleFrame
+        alertWindow.setFrameOrigin(
+            NSPoint(
+                x: visibleFrame.midX - frame.width / 2,
+                y: visibleFrame.midY - frame.height / 2
+            )
+        )
     }
 }

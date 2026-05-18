@@ -9,7 +9,13 @@ final class SessionStore: ObservableObject {
 
     @Published private(set) var sessions: [CodexSession] = []
     @Published var searchText: String = ""
-    @Published var scope: SessionScope = .active
+    @Published var scope: SessionScope = .active {
+        didSet {
+            if oldValue != scope {
+                selectedIDs.removeAll()
+            }
+        }
+    }
     @Published var selectedProject: String = SessionStore.allProjectsLabel
     @Published var selectedIDs: Set<String> = []
     @Published var utilizationProgressMode: UtilizationProgressMode
@@ -83,6 +89,22 @@ final class SessionStore: ObservableObject {
     var projectOptions: [String] {
         let names = Set(sessions.map(\.projectName))
         return [SessionStore.allProjectsLabel] + names.sorted()
+    }
+
+    var projectMoveTargets: [ProjectMoveTarget] {
+        var targetsByPath: [String: ProjectMoveTarget] = [:]
+
+        for session in sessions {
+            guard let projectPath = session.projectPath, !projectPath.isEmpty else {
+                continue
+            }
+            targetsByPath[projectPath] = ProjectMoveTarget(name: session.projectName, path: projectPath)
+        }
+
+        let sortedTargets = targetsByPath.values.sorted {
+            $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+        return [.chats] + sortedTargets
     }
 
     var isBusy: Bool {
@@ -164,6 +186,16 @@ final class SessionStore: ObservableObject {
         runMutation(.rename(id: id, newTitle: newTitle), message: localized("mutation.renaming"))
     }
 
+    func moveSession(id: String, to target: ProjectMoveTarget) {
+        runMutation(.move(ids: [id], projectPath: target.path), message: localized("mutation.moving"))
+    }
+
+    func moveSelected(to target: ProjectMoveTarget) {
+        let ids = Set(selectedSessions.map(\.id))
+        guard !ids.isEmpty else { return }
+        runMutation(.move(ids: ids, projectPath: target.path), message: localized("mutation.moving"))
+    }
+
     func updateCodexRootPath(_ newPath: String) {
         let trimmed = newPath.trimmingCharacters(in: .whitespacesAndNewlines)
         codexRootPath = trimmed.isEmpty ? SessionStore.defaultCodexRootPath() : expandedPath(trimmed)
@@ -186,6 +218,10 @@ final class SessionStore: ObservableObject {
 
     func clearError() {
         lastError = nil
+    }
+
+    func clearSelection() {
+        selectedIDs.removeAll()
     }
 
     func recentSessions(limit: Int = 6) -> [CodexSession] {
@@ -314,6 +350,9 @@ final class SessionStore: ObservableObject {
                 try service.trash(targets)
             case let .rename(id, newTitle):
                 try service.renameSession(id: id, newTitle: newTitle)
+            case let .move(ids, projectPath):
+                let targets = ids.compactMap { byID[$0] }
+                try service.moveSessions(targets, toProjectPath: projectPath)
             }
             return .success
         } catch {
@@ -343,4 +382,5 @@ private enum SessionMutation: Sendable {
     case trash(ids: Set<String>)
     case trashProject(projectName: String)
     case rename(id: String, newTitle: String)
+    case move(ids: Set<String>, projectPath: String?)
 }

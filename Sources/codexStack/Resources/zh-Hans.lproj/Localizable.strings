@@ -97,6 +97,11 @@
 "Search title or session id" = "搜索标题或会话 ID";
 "Scope" = "范围";
 "Move to Trash" = "移到废纸篓";
+"Move..." = "移动...";
+"Move" = "移动";
+"Move to Project..." = "移动到项目...";
+"Move to Project" = "移动到项目";
+"Choose destination project" = "选择目标项目";
 "Rename" = "重命名";
 "Operation Failed" = "操作失败";
 "Move selected session files to Trash?" = "将选中会话文件移到废纸篓？";
@@ -132,3 +137,4 @@
 "mutation.trashing" = "正在移到废纸篓...";
 "mutation.removing_project" = "正在删除项目...";
 "mutation.renaming" = "正在重命名...";
+"mutation.moving" = "正在移动...";

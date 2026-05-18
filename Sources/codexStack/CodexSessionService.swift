@@ -131,6 +131,31 @@ struct CodexSessionService {
         )
     }
 
+    func moveSessions(_ sessions: [CodexSession], toProjectPath projectPath: String?) throws {
+        guard !sessions.isEmpty else { return }
+        let normalizedProjectPath = normalizedText(projectPath)
+        var changedCodexState = false
+        var changedSessionFiles = false
+
+        if fileManager.fileExists(atPath: stateDatabaseURL.path) {
+            changedCodexState = try updateThreadProjectPath(
+                ids: sessions.map(\.id),
+                projectPath: normalizedProjectPath
+            )
+        }
+
+        for session in sessions {
+            changedSessionFiles = try updateSessionFileProjectPath(
+                session.fileURL,
+                projectPath: normalizedProjectPath
+            ) || changedSessionFiles
+        }
+
+        guard changedCodexState || changedSessionFiles else {
+            throw NSError(domain: "codexStack", code: 7, userInfo: [NSLocalizedDescriptionKey: "Session project store not found"])
+        }
+    }
+
     func reconcileSessionIndex() throws {
         try syncSessionIndex()
     }
@@ -300,6 +325,85 @@ struct CodexSessionService {
             throw NSError(domain: "codexStack", code: 6, userInfo: [NSLocalizedDescriptionKey: "Could not update Codex title"])
         }
         return sqlite3_changes(database) > 0
+    }
+
+    private func updateThreadProjectPath(ids: [String], projectPath: String?) throws -> Bool {
+        guard !ids.isEmpty else { return false }
+        var database: OpaquePointer?
+        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
+        guard sqlite3_open_v2(stateDatabaseURL.path, &database, flags, nil) == SQLITE_OK,
+              let database else {
+            defer {
+                if database != nil {
+                    sqlite3_close(database)
+                }
+            }
+            throw NSError(domain: "codexStack", code: 8, userInfo: [NSLocalizedDescriptionKey: "Could not open Codex state database"])
+        }
+        defer { sqlite3_close(database) }
+
+        let sql = "UPDATE threads SET cwd = ? WHERE id = ?"
+        var changed = false
+        for id in ids {
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+                  let statement else {
+                throw NSError(domain: "codexStack", code: 9, userInfo: [NSLocalizedDescriptionKey: "Could not prepare project update"])
+            }
+
+            if let projectPath {
+                sqlite3_bind_text(statement, 1, projectPath, -1, SQLITE_TRANSIENT)
+            } else {
+                sqlite3_bind_null(statement, 1)
+            }
+            sqlite3_bind_text(statement, 2, id, -1, SQLITE_TRANSIENT)
+
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                sqlite3_finalize(statement)
+                throw NSError(domain: "codexStack", code: 10, userInfo: [NSLocalizedDescriptionKey: "Could not update Codex project"])
+            }
+            changed = changed || sqlite3_changes(database) > 0
+            sqlite3_finalize(statement)
+        }
+        return changed
+    }
+
+    private func updateSessionFileProjectPath(_ fileURL: URL, projectPath: String?) throws -> Bool {
+        guard fileManager.fileExists(atPath: fileURL.path) else { return false }
+        let original = try String(contentsOf: fileURL, encoding: .utf8)
+        let lines = original.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard !lines.isEmpty else { return false }
+
+        var changed = false
+        let rewrittenLines = lines.map { line -> String in
+            guard !line.isEmpty,
+                  let data = line.data(using: .utf8),
+                  var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  (root["type"] as? String) == "session_meta" else {
+                return line
+            }
+
+            var payload = (root["payload"] as? [String: Any]) ?? [:]
+            if let projectPath {
+                guard (payload["cwd"] as? String) != projectPath else { return line }
+                payload["cwd"] = projectPath
+            } else {
+                guard payload["cwd"] != nil else { return line }
+                payload.removeValue(forKey: "cwd")
+            }
+            root["payload"] = payload
+
+            guard let rewrittenData = try? JSONSerialization.data(withJSONObject: root),
+                  let rewritten = String(data: rewrittenData, encoding: .utf8) else {
+                return line
+            }
+            changed = true
+            return rewritten
+        }
+
+        guard changed else { return false }
+        try rewrittenLines.joined(separator: "\n").write(to: fileURL, atomically: true, encoding: .utf8)
+        return true
     }
 
     private func extractSessionID(from fileName: String) -> String? {
