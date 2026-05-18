@@ -1500,7 +1500,10 @@ final class SettingsWindowController: NSWindowController {
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
             window.isMovableByWindowBackground = false
-            window.toolbarStyle = .unifiedCompact
+            window.toolbarStyle = .unified
+            let toolbar = NSToolbar()
+            toolbar.showsBaselineSeparator = false
+            window.toolbar = toolbar
             window.backgroundColor = .clear
             window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
             window.setContentSize(contentSize)
