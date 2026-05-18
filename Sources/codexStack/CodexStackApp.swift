@@ -1639,10 +1639,11 @@ private struct SettingsWindowView: View {
             }
             Spacer()
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 16)
-        .padding(.bottom, 14)
-        .background(Color.clear)
+        .padding(.leading, 84)
+        .padding(.trailing, 18)
+        .padding(.top, 14)
+        .padding(.bottom, 12)
+        .background(.regularMaterial)
         .overlay(alignment: .bottom) {
             Divider()
         }
