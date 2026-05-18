@@ -1921,7 +1921,7 @@ private struct SettingsWindowView: View {
                             subtitle: localized("Switch when the current account's 5h session limit reaches this percentage.")
                         ) {
                             HStack {
-                                Slider(value: $autoSwitchSessionThreshold, in: 1...100, step: 1) { _ in
+                                Slider(value: $autoSwitchSessionThreshold, in: 1...100) { _ in
                                     onAutoSwitchChanged(autoSwitchEnabled, autoSwitchSessionThreshold, autoSwitchWeeklyThreshold, autoSwitchNotificationEnabled)
                                 }
                                 .frame(width: 150)
@@ -1935,7 +1935,7 @@ private struct SettingsWindowView: View {
                             subtitle: localized("Switch when the current account's weekly limit reaches this percentage.")
                         ) {
                             HStack {
-                                Slider(value: $autoSwitchWeeklyThreshold, in: 1...100, step: 1) { _ in
+                                Slider(value: $autoSwitchWeeklyThreshold, in: 1...100) { _ in
                                     onAutoSwitchChanged(autoSwitchEnabled, autoSwitchSessionThreshold, autoSwitchWeeklyThreshold, autoSwitchNotificationEnabled)
                                 }
                                 .frame(width: 150)
