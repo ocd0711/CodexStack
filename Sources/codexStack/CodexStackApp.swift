@@ -6,6 +6,7 @@ struct CodexStackApp: App {
     private static let codexRootPathDefaultsKey = "codexRootPath"
     private static let utilizationProgressModeDefaultsKey = "utilizationProgressMode"
     private static let showMenuBarPercentageDefaultsKey = "showMenuBarPercentage"
+    private static let refreshIntervalDefaultsKey = "refreshInterval"
     @NSApplicationDelegateAdaptor(CodexStackAppDelegate.self) private var appDelegate
     @StateObject private var store: SessionStore
     @State private var showMenuBarPercentage: Bool
@@ -16,10 +17,13 @@ struct CodexStackApp: App {
         let savedModeRaw = UserDefaults.standard.string(forKey: Self.utilizationProgressModeDefaultsKey)
         let savedMode = UtilizationProgressMode(rawValue: savedModeRaw ?? "") ?? .remaining
         let showPercentage = UserDefaults.standard.object(forKey: Self.showMenuBarPercentageDefaultsKey) as? Bool ?? true
+        let savedRefreshRaw = UserDefaults.standard.object(forKey: Self.refreshIntervalDefaultsKey) as? Int
+        let savedRefreshInterval = RefreshInterval(rawValue: savedRefreshRaw ?? 0) ?? .off
         _store = StateObject(
             wrappedValue: SessionStore(
                 codexRootPath: saved,
-                utilizationProgressMode: savedMode
+                utilizationProgressMode: savedMode,
+                refreshInterval: savedRefreshInterval
             )
         )
         _showMenuBarPercentage = State(initialValue: showPercentage)
@@ -32,8 +36,9 @@ struct CodexStackApp: App {
                     SettingsWindowController.shared.show(
                         currentPath: store.codexRootPath,
                         currentProgressMode: store.utilizationProgressMode,
-                        showMenuBarPercentage: showMenuBarPercentage
-                    ) { newPath, progressMode, showPercentage in
+                        showMenuBarPercentage: showMenuBarPercentage,
+                        refreshInterval: store.refreshInterval
+                    ) { newPath, progressMode, showPercentage, refreshInterval in
                         let expanded = NSString(string: newPath).expandingTildeInPath
                         UserDefaults.standard.set(expanded, forKey: Self.codexRootPathDefaultsKey)
                         UserDefaults.standard.set(
@@ -41,10 +46,12 @@ struct CodexStackApp: App {
                             forKey: Self.utilizationProgressModeDefaultsKey
                         )
                         UserDefaults.standard.set(showPercentage, forKey: Self.showMenuBarPercentageDefaultsKey)
+                        UserDefaults.standard.set(refreshInterval.rawValue, forKey: Self.refreshIntervalDefaultsKey)
                         if expanded != store.codexRootPath {
                             store.updateCodexRootPath(expanded)
                         }
                         store.updateUtilizationProgressMode(progressMode)
+                        store.updateRefreshInterval(refreshInterval)
                         showMenuBarPercentage = showPercentage
                     }
                 }
@@ -1124,8 +1131,8 @@ final class ManagerWindowController: NSWindowController, NSWindowDelegate {
 @MainActor
 final class SettingsWindowController: NSWindowController {
     static let shared = SettingsWindowController()
-    private let contentSize = NSSize(width: 760, height: 620)
-    private var settingsViewController: SettingsViewController?
+    private let contentSize = NSSize(width: 820, height: 560)
+    private var settingsHostingController: NSHostingController<SettingsWindowView>?
 
     private init() {
         super.init(window: nil)
@@ -1140,7 +1147,8 @@ final class SettingsWindowController: NSWindowController {
         currentPath: String,
         currentProgressMode: UtilizationProgressMode,
         showMenuBarPercentage: Bool,
-        onSave: @escaping (String, UtilizationProgressMode, Bool) -> Void
+        refreshInterval: RefreshInterval,
+        onSave: @escaping (String, UtilizationProgressMode, Bool, RefreshInterval) -> Void
     ) {
         DispatchQueue.main.async { [weak self] in
             self?.dismissTransientMenuWindows()
@@ -1149,6 +1157,7 @@ final class SettingsWindowController: NSWindowController {
                     currentPath: currentPath,
                     currentProgressMode: currentProgressMode,
                     showMenuBarPercentage: showMenuBarPercentage,
+                    refreshInterval: refreshInterval,
                     onSave: onSave
                 )
             }
@@ -1168,447 +1177,543 @@ final class SettingsWindowController: NSWindowController {
         currentPath: String,
         currentProgressMode: UtilizationProgressMode,
         showMenuBarPercentage: Bool,
-        onSave: @escaping (String, UtilizationProgressMode, Bool) -> Void
+        refreshInterval: RefreshInterval,
+        onSave: @escaping (String, UtilizationProgressMode, Bool, RefreshInterval) -> Void
     ) {
-        let viewController: SettingsViewController
-        if let existing = settingsViewController {
-            existing.configure(
-                currentPath: currentPath,
-                currentProgressMode: currentProgressMode,
-                showMenuBarPercentage: showMenuBarPercentage,
-                onSave: onSave
-            )
-            viewController = existing
+        let settingsView = SettingsWindowView(
+            currentPath: currentPath,
+            currentProgressMode: currentProgressMode,
+            showMenuBarPercentage: showMenuBarPercentage,
+            refreshInterval: refreshInterval,
+            onSave: onSave
+        )
+        let hostingController: NSHostingController<SettingsWindowView>
+        if let existing = settingsHostingController {
+            existing.rootView = settingsView
+            hostingController = existing
         } else {
-            viewController = SettingsViewController(
-                currentPath: currentPath,
-                currentProgressMode: currentProgressMode,
-                showMenuBarPercentage: showMenuBarPercentage,
-                onSave: onSave
-            )
-            settingsViewController = viewController
+            hostingController = NSHostingController(rootView: settingsView)
+            settingsHostingController = hostingController
         }
 
         if window == nil {
-            let window = NSWindow(contentViewController: viewController)
+            let window = NSWindow(contentViewController: hostingController)
             window.title = "Settings"
-            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            window.styleMask.insert(.fullSizeContentView)
             window.isReleasedWhenClosed = false
             window.level = .normal
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
             window.isMovableByWindowBackground = true
-            window.toolbarStyle = .unified
-            window.backgroundColor = .windowBackgroundColor
+            window.toolbarStyle = .unifiedCompact
+            window.backgroundColor = .clear
+            window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
             window.setContentSize(contentSize)
-            window.minSize = NSSize(width: 700, height: 560)
+            window.minSize = NSSize(width: 760, height: 500)
+            window.center()
             self.window = window
         } else {
-            window?.contentViewController = viewController
+            window?.contentViewController = hostingController
         }
 
         window?.setContentSize(contentSize)
-        window?.minSize = NSSize(width: 700, height: 560)
+        window?.minSize = NSSize(width: 760, height: 500)
         NSApplication.shared.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
     }
 }
 
-@MainActor
-private final class SettingsViewController: NSViewController {
-    private let pathField = NSTextField()
-    private let pathSaveButton = NSButton()
-    private let progressControl = NSSegmentedControl(
-        labels: UtilizationProgressMode.allCases.map(\.label),
-        trackingMode: .selectOne,
-        target: nil,
-        action: nil
-    )
-    private let showPercentageCheckbox = NSButton()
-    private var currentPath: String
-    private var progressMode: UtilizationProgressMode
-    private var showMenuBarPercentage: Bool
-    private var onSave: (String, UtilizationProgressMode, Bool) -> Void
+private enum SettingsPane: String, CaseIterable, Identifiable {
+    case general
+    case about
+
+    var id: String { rawValue }
+
+    var titleKey: String {
+        switch self {
+        case .general:
+            return "General"
+        case .about:
+            return "About"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .general:
+            return "gearshape"
+        case .about:
+            return "info.circle"
+        }
+    }
+}
+
+private struct SettingsWindowView: View {
+    @State private var selectedPane: SettingsPane = .general
+    @State private var currentPath: String
+    @State private var progressMode: UtilizationProgressMode
+    @State private var showMenuBarPercentage: Bool
+    @State private var refreshInterval: RefreshInterval
+    @State private var updateAlert: UpdateAlert?
+    @State private var isCheckingUpdates = false
+    let onSave: (String, UtilizationProgressMode, Bool, RefreshInterval) -> Void
 
     init(
         currentPath: String,
         currentProgressMode: UtilizationProgressMode,
         showMenuBarPercentage: Bool,
-        onSave: @escaping (String, UtilizationProgressMode, Bool) -> Void
+        refreshInterval: RefreshInterval,
+        onSave: @escaping (String, UtilizationProgressMode, Bool, RefreshInterval) -> Void
     ) {
-        self.currentPath = currentPath
-        self.progressMode = currentProgressMode
-        self.showMenuBarPercentage = showMenuBarPercentage
-        self.onSave = onSave
-        super.init(nibName: nil, bundle: nil)
-        configure(
-            currentPath: currentPath,
-            currentProgressMode: currentProgressMode,
-            showMenuBarPercentage: showMenuBarPercentage,
-            onSave: onSave
-        )
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    func configure(
-        currentPath: String,
-        currentProgressMode: UtilizationProgressMode,
-        showMenuBarPercentage: Bool,
-        onSave: @escaping (String, UtilizationProgressMode, Bool) -> Void
-    ) {
-        self.currentPath = currentPath
-        self.showMenuBarPercentage = showMenuBarPercentage
-        if isViewLoaded {
-            pathField.stringValue = currentPath
-            progressControl.selectedSegment = UtilizationProgressMode.allCases.firstIndex(of: currentProgressMode) ?? 0
-            showPercentageCheckbox.state = showMenuBarPercentage ? .on : .off
-        }
-        progressMode = currentProgressMode
+        _currentPath = State(initialValue: currentPath)
+        _progressMode = State(initialValue: currentProgressMode)
+        _showMenuBarPercentage = State(initialValue: showMenuBarPercentage)
+        _refreshInterval = State(initialValue: refreshInterval)
         self.onSave = onSave
     }
 
-    override func loadView() {
-        let effectView = NSVisualEffectView()
-        effectView.material = .contentBackground
-        effectView.blendingMode = .behindWindow
-        effectView.state = .active
-        effectView.translatesAutoresizingMaskIntoConstraints = false
-        view = effectView
-
-        let rootStack = NSStackView()
-        rootStack.orientation = .vertical
-        rootStack.alignment = .leading
-        rootStack.spacing = 0
-        rootStack.translatesAutoresizingMaskIntoConstraints = false
-        effectView.addSubview(rootStack)
-
-        let topBar = makeSettingsHeader()
-        let divider = makeDivider()
-        let scrollView = NSScrollView()
-        scrollView.borderType = .noBorder
-        scrollView.drawsBackground = false
-        scrollView.hasVerticalScroller = true
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-
-        let contentWrap = NSView()
-        contentWrap.translatesAutoresizingMaskIntoConstraints = false
-        let contentStack = NSStackView()
-        contentStack.orientation = .vertical
-        contentStack.alignment = .leading
-        contentStack.spacing = 18
-        contentStack.translatesAutoresizingMaskIntoConstraints = false
-        contentWrap.addSubview(contentStack)
-        scrollView.documentView = contentWrap
-
-        let systemSection = makeSectionTitle(localized("SYSTEM"))
-        let (systemCard, systemCardStack) = makeSettingsCard()
-        let directoryRow = makeSettingsRow(
-            title: localized("Codex Directory"),
-            subtitle: localized("Used for session scan, archive, and index reconciliation.")
-        )
-
-        let pathRow = NSStackView()
-        pathRow.orientation = .horizontal
-        pathRow.alignment = .centerY
-        pathRow.spacing = 8
-        pathRow.translatesAutoresizingMaskIntoConstraints = false
-
-        pathField.placeholderString = SessionStore.defaultCodexRootPath()
-        pathField.bezelStyle = .roundedBezel
-        pathField.translatesAutoresizingMaskIntoConstraints = false
-        pathField.font = .systemFont(ofSize: 13)
-
-        let browseButton = NSButton(title: localized("Browse..."), target: self, action: #selector(chooseDirectory))
-        browseButton.bezelStyle = .rounded
-        pathSaveButton.title = localized("Save")
-        pathSaveButton.target = self
-        pathSaveButton.action = #selector(savePath)
-        pathSaveButton.bezelStyle = .rounded
-
-        pathRow.addArrangedSubview(pathField)
-        pathRow.addArrangedSubview(browseButton)
-        pathRow.addArrangedSubview(pathSaveButton)
-        directoryRow.addArrangedSubview(pathRow)
-        systemCardStack.addArrangedSubview(directoryRow)
-
-        let displaySection = makeSectionTitle(localized("DISPLAY"))
-        let (displayCard, displayCardStack) = makeSettingsCard()
-        let progressRow = makeSettingsRow(
-            title: localized("Progress Bar"),
-            subtitle: localized("Controls whether usage bars show used or remaining quota.")
-        )
-
-        progressControl.target = self
-        progressControl.action = #selector(progressModeChanged)
-        progressControl.segmentStyle = .rounded
-        progressControl.translatesAutoresizingMaskIntoConstraints = false
-        for index in 0..<progressControl.segmentCount {
-            progressControl.setWidth(116, forSegment: index)
-        }
-        progressRow.addArrangedSubview(progressControl)
-
-        showPercentageCheckbox.setButtonType(.switch)
-        showPercentageCheckbox.title = localized("Show percentage text")
-        showPercentageCheckbox.target = self
-        showPercentageCheckbox.action = #selector(showPercentageChanged)
-        showPercentageCheckbox.state = showMenuBarPercentage ? .on : .off
-        showPercentageCheckbox.font = .systemFont(ofSize: 15, weight: .medium)
-        let percentageRow = makeSettingsRow(
-            title: "",
-            subtitle: localized("Display the quota percentage next to the menu bar icon.")
-        )
-        percentageRow.insertArrangedSubview(showPercentageCheckbox, at: 0)
-        displayCardStack.addArrangedSubview(progressRow)
-        displayCardStack.addArrangedSubview(makeSeparator())
-        displayCardStack.addArrangedSubview(percentageRow)
-
-        let automationSection = makeSectionTitle(localized("AUTOMATION"))
-        let (automationCard, automationCardStack) = makeSettingsCard()
-        let refreshInfo = makeMutedText(localized("Usage and sessions refresh automatically when the menu opens or after mutations."))
-        automationCardStack.addArrangedSubview(refreshInfo)
-
-        contentStack.addArrangedSubview(systemSection)
-        contentStack.addArrangedSubview(systemCard)
-        contentStack.addArrangedSubview(displaySection)
-        contentStack.addArrangedSubview(displayCard)
-        contentStack.addArrangedSubview(automationSection)
-        contentStack.addArrangedSubview(automationCard)
-        rootStack.addArrangedSubview(topBar)
-        rootStack.addArrangedSubview(divider)
-        rootStack.addArrangedSubview(scrollView)
-
-        NSLayoutConstraint.activate([
-            rootStack.leadingAnchor.constraint(equalTo: effectView.leadingAnchor),
-            rootStack.trailingAnchor.constraint(equalTo: effectView.trailingAnchor),
-            rootStack.topAnchor.constraint(equalTo: effectView.topAnchor),
-            rootStack.bottomAnchor.constraint(equalTo: effectView.bottomAnchor),
-            topBar.widthAnchor.constraint(equalTo: rootStack.widthAnchor),
-            topBar.heightAnchor.constraint(equalToConstant: 112),
-            divider.widthAnchor.constraint(equalTo: rootStack.widthAnchor),
-            divider.heightAnchor.constraint(equalToConstant: 1),
-            scrollView.widthAnchor.constraint(equalTo: rootStack.widthAnchor),
-            contentWrap.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
-            contentStack.leadingAnchor.constraint(equalTo: contentWrap.leadingAnchor, constant: 78),
-            contentStack.trailingAnchor.constraint(equalTo: contentWrap.trailingAnchor, constant: -78),
-            contentStack.topAnchor.constraint(equalTo: contentWrap.topAnchor, constant: 28),
-            contentStack.bottomAnchor.constraint(equalTo: contentWrap.bottomAnchor, constant: -32),
-            systemSection.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
-            systemCard.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
-            directoryRow.widthAnchor.constraint(equalTo: systemCardStack.widthAnchor),
-            displaySection.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
-            displayCard.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
-            progressRow.widthAnchor.constraint(equalTo: displayCardStack.widthAnchor),
-            percentageRow.widthAnchor.constraint(equalTo: displayCardStack.widthAnchor),
-            automationSection.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
-            automationCard.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
-            refreshInfo.widthAnchor.constraint(equalTo: automationCardStack.widthAnchor),
-            pathField.widthAnchor.constraint(greaterThanOrEqualToConstant: 320),
-            pathField.heightAnchor.constraint(equalToConstant: 28),
-            progressControl.heightAnchor.constraint(equalToConstant: 28),
-        ])
-
-        configure(
-            currentPath: currentPath,
-            currentProgressMode: progressMode,
-            showMenuBarPercentage: showMenuBarPercentage,
-            onSave: onSave
-        )
-    }
-
-    private func makeSettingsHeader() -> NSView {
-        let container = NSView()
-        container.translatesAutoresizingMaskIntoConstraints = false
-
-        let row = NSStackView()
-        row.orientation = .horizontal
-        row.alignment = .centerY
-        row.spacing = 14
-        row.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(row)
-
-        let logoView = NSImageView(image: projectLogoImage())
-        logoView.imageScaling = .scaleProportionallyUpOrDown
-        logoView.translatesAutoresizingMaskIntoConstraints = false
-
-        let logoPlate = NSVisualEffectView()
-        logoPlate.material = .popover
-        logoPlate.blendingMode = .withinWindow
-        logoPlate.state = .active
-        logoPlate.wantsLayer = true
-        logoPlate.layer?.cornerRadius = 18
-        logoPlate.translatesAutoresizingMaskIntoConstraints = false
-        logoPlate.addSubview(logoView)
-
-        let titleStack = makeVerticalStack(spacing: 4)
-        titleStack.addArrangedSubview(makeLabel("codexStack", font: .systemFont(ofSize: 24, weight: .semibold)))
-        titleStack.addArrangedSubview(makeLabel(
-            localized("Configure codexStack and Codex session sources."),
-            font: .systemFont(ofSize: 13),
-            color: .secondaryLabelColor
-        ))
-
-        row.addArrangedSubview(logoPlate)
-        row.addArrangedSubview(titleStack)
-
-        NSLayoutConstraint.activate([
-            row.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 78),
-            row.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -78),
-            row.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            logoPlate.widthAnchor.constraint(equalToConstant: 58),
-            logoPlate.heightAnchor.constraint(equalToConstant: 58),
-            logoView.centerXAnchor.constraint(equalTo: logoPlate.centerXAnchor),
-            logoView.centerYAnchor.constraint(equalTo: logoPlate.centerYAnchor),
-            logoView.widthAnchor.constraint(equalToConstant: 42),
-            logoView.heightAnchor.constraint(equalToConstant: 42),
-        ])
-        return container
-    }
-
-    private func projectLogoImage() -> NSImage {
-        let candidates = [
-            Bundle.module.url(forResource: "codexStack-logo", withExtension: "png"),
-            Bundle.module.url(forResource: "codexStack-logo", withExtension: "png", subdirectory: "Assets"),
-        ]
-        for url in candidates.compactMap({ $0 }) {
-            if let image = NSImage(contentsOf: url) {
-                return image
+    var body: some View {
+        VStack(spacing: 0) {
+            headerBar
+            Divider()
+            HStack(spacing: 0) {
+                sidebar
+                    .frame(width: 220)
+                Divider()
+                contentPane
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        return StatusIconRenderer.makeIcon(
-            sessionUsedRatio: 0.36,
-            weeklyUsedRatio: 0.72,
-            progressMode: progressMode
-        )
-    }
-
-    private func makeDivider() -> NSView {
-        let divider = NSBox()
-        divider.boxType = .separator
-        divider.translatesAutoresizingMaskIntoConstraints = false
-        return divider
-    }
-
-    private func makeSectionTitle(_ text: String) -> NSTextField {
-        let label = makeLabel(text, font: .systemFont(ofSize: 12, weight: .medium), color: .secondaryLabelColor)
-        label.lineBreakMode = .byTruncatingTail
-        return label
-    }
-
-    private func makeSettingsRow(title: String, subtitle: String) -> NSStackView {
-        let row = NSStackView()
-        row.orientation = .vertical
-        row.alignment = .leading
-        row.spacing = 7
-        row.translatesAutoresizingMaskIntoConstraints = false
-        if !title.isEmpty {
-            row.addArrangedSubview(makeLabel(title, font: .systemFont(ofSize: 16, weight: .regular)))
+        .frame(minWidth: 760, minHeight: 500)
+        .background(settingsWindowBackground)
+        .alert(item: $updateAlert) { alert in
+            Alert(
+                title: Text(alert.title),
+                message: Text(alert.message),
+                dismissButton: .default(Text("OK"))
+            )
         }
-        if !subtitle.isEmpty {
-            row.addArrangedSubview(makeMutedText(subtitle))
+    }
+
+    private var headerBar: some View {
+        HStack(spacing: 12) {
+            Image(nsImage: codexStackLogoImage(progressMode: progressMode))
+                .resizable()
+                .frame(width: 34, height: 34)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(localized("Settings"))
+                    .font(.title2.weight(.semibold))
+                Text(localized("Configure codexStack and Codex session sources."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text("codexStack")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 18)
+                .frame(height: 32)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .stroke(Color.secondary.opacity(0.22), lineWidth: 1)
+                }
         }
-        return row
+        .padding(.horizontal, 18)
+        .padding(.top, 16)
+        .padding(.bottom, 14)
+        .background(.regularMaterial)
+        .overlay(alignment: .bottom) {
+            Divider()
+        }
     }
 
-    private func makeSettingsCard() -> (NSVisualEffectView, NSStackView) {
-        let card = NSVisualEffectView()
-        card.material = .popover
-        card.blendingMode = .withinWindow
-        card.state = .active
-        card.wantsLayer = true
-        card.layer?.cornerRadius = 16
-        card.layer?.borderWidth = 0.5
-        card.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.35).cgColor
-        card.translatesAutoresizingMaskIntoConstraints = false
-
-        let stack = makeVerticalStack(spacing: 14)
-        card.addSubview(stack)
-
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 18),
-            stack.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -18),
-            stack.topAnchor.constraint(equalTo: card.topAnchor, constant: 16),
-            stack.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -16),
-        ])
-
-        return (card, stack)
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(SettingsPane.allCases) { pane in
+                Button {
+                    selectedPane = pane
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: pane.symbolName)
+                            .frame(width: 18)
+                        Text(localized(pane.titleKey))
+                        Spacer()
+                    }
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(selectedPane == pane ? Color.accentColor : Color.secondary)
+                    .padding(.horizontal, 10)
+                    .frame(height: 32)
+                    .background {
+                        if selectedPane == pane {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.accentColor.opacity(0.16))
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 18)
+        .background(settingsSidebarBackground)
     }
 
-    private func makeMutedText(_ text: String) -> NSTextField {
-        makeLabel(text, font: .systemFont(ofSize: 13), color: .tertiaryLabelColor)
+    @ViewBuilder
+    private var contentPane: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text(localized(selectedPane.titleKey))
+                    .font(.title.weight(.semibold))
+                    .padding(.bottom, 2)
+                switch selectedPane {
+                case .general:
+                    generalPane
+                case .about:
+                    aboutPane
+                }
+            }
+            .frame(maxWidth: 560, alignment: .leading)
+            .padding(.horizontal, 36)
+            .padding(.vertical, 30)
+            .frame(maxWidth: .infinity, alignment: .center)
+        }
+        .scrollContentBackground(.hidden)
     }
 
-    private func makeSeparator() -> NSView {
-        let box = NSBox()
-        box.boxType = .separator
-        box.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            box.heightAnchor.constraint(equalToConstant: 1),
-        ])
-        return box
+    private var generalPane: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            sectionTitle("Codex")
+            settingsCard {
+                SettingsLine(title: localized("Codex Directory"), subtitle: localized("Used for session scan, archive, and index reconciliation.")) {
+                    VStack(alignment: .trailing, spacing: 8) {
+                        TextField("", text: $currentPath)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 300)
+                        HStack(spacing: 8) {
+                            Button(localized("Browse..."), action: chooseDirectory)
+                            Button(localized("Save"), action: savePath)
+                                .keyboardShortcut(.defaultAction)
+                        }
+                    }
+                }
+            }
+
+            sectionTitle("Menu Bar")
+            settingsCard {
+                SettingsLine(title: localized("Progress Bar"), subtitle: localized("Controls whether usage bars show used or remaining quota.")) {
+                    Picker("", selection: $progressMode) {
+                        ForEach(UtilizationProgressMode.allCases) { mode in
+                            Text(mode.label).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 210)
+                    .onChange(of: progressMode) { _ in applyNonPathSettings() }
+                }
+                SettingsDivider()
+                SettingsLine(title: localized("Show percentage text"), subtitle: localized("Display the quota percentage next to the menu bar icon.")) {
+                    SettingsSwitch(isOn: $showMenuBarPercentage) {
+                        applyNonPathSettings()
+                    }
+                }
+                SettingsDivider()
+                SettingsLine(title: localized("Auto refresh"), subtitle: localized("Refresh usage and sessions in the background at this interval.")) {
+                    Picker("", selection: $refreshInterval) {
+                        ForEach(RefreshInterval.allCases) { interval in
+                            Text(interval.label).tag(interval)
+                        }
+                    }
+                    .frame(width: 180)
+                    .onChange(of: refreshInterval) { _ in applyNonPathSettings() }
+                }
+            }
+        }
     }
 
-    private func makeVerticalStack(spacing: CGFloat) -> NSStackView {
-        let stack = NSStackView()
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = spacing
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        return stack
+    private var aboutPane: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(spacing: 8) {
+                Image(nsImage: codexStackLogoImage(progressMode: progressMode))
+                    .resizable()
+                    .frame(width: 70, height: 70)
+                Text("codexStack")
+                    .font(.title2.weight(.semibold))
+                Text(appVersionText)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 20)
+
+            sectionTitle("Application")
+            settingsCard {
+                SettingsLine(title: localized("Version")) {
+                    Text(appVersionText)
+                        .foregroundStyle(.secondary)
+                }
+                SettingsDivider()
+                SettingsLine(title: localized("Repository"), subtitle: localized("GitHub Releases")) {
+                    Button(localized("Open GitHub"), action: openRepository)
+                }
+                SettingsDivider()
+                SettingsLine(title: localized("Updates"), subtitle: localized("Check the latest version from GitHub Releases.")) {
+                    Button(isCheckingUpdates ? localized("Checking...") : localized("Check for Updates"), action: checkForUpdates)
+                        .disabled(isCheckingUpdates)
+                }
+                SettingsDivider()
+                Text(localized("Manual update checks use the latest GitHub Release. Automatic updates can be added later with Sparkle."))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 13)
+            }
+        }
     }
 
-    private func makeLabel(_ text: String, font: NSFont, color: NSColor = .labelColor) -> NSTextField {
-        let label = NSTextField(labelWithString: text)
-        label.font = font
-        label.textColor = color
-        label.lineBreakMode = .byWordWrapping
-        label.maximumNumberOfLines = 0
-        return label
+    private func settingsCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        VStack(spacing: 0, content: content)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(settingsCardTint, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.08), radius: 18, y: 8)
+    }
+
+    private var settingsWindowBackground: some View {
+        ZStack {
+            Rectangle().fill(.regularMaterial)
+            Color(nsColor: .windowBackgroundColor).opacity(0.28)
+        }
+    }
+
+    private var settingsSidebarBackground: some View {
+        ZStack {
+            Rectangle().fill(.ultraThinMaterial)
+            Color(nsColor: .controlBackgroundColor).opacity(0.18)
+        }
+    }
+
+    private var settingsCardTint: some ShapeStyle {
+        Color(nsColor: .controlBackgroundColor).opacity(0.34)
+    }
+
+    private func sectionTitle(_ key: String) -> some View {
+        Text(localized(key))
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.leading, 4)
+    }
+
+    private func chooseDirectory() {
+        let panel = NSOpenPanel()
+        panel.prompt = localized("Choose")
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            currentPath = url.path
+        }
+    }
+
+    private func savePath() {
+        onSave(currentPath, progressMode, showMenuBarPercentage, refreshInterval)
+    }
+
+    private func applyNonPathSettings() {
+        onSave(currentPath, progressMode, showMenuBarPercentage, refreshInterval)
+    }
+
+    private func openRepository() {
+        guard let url = URL(string: "https://github.com/ocd0711/CodexStack") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func checkForUpdates() {
+        isCheckingUpdates = true
+        Task {
+            defer { isCheckingUpdates = false }
+            do {
+                let release = try await GitHubReleaseChecker.fetchLatest()
+                if compareVersions(release.version, currentVersion) == .orderedDescending {
+                    updateAlert = UpdateAlert(
+                        title: String(format: localized("codexStack %@ is available."), release.tagName),
+                        message: localized("Open the GitHub Release page to download the latest build.")
+                    )
+                    if let url = URL(string: release.htmlURL) {
+                        NSWorkspace.shared.open(url)
+                    }
+                } else {
+                    updateAlert = UpdateAlert(
+                        title: localized("codexStack is up to date."),
+                        message: String(format: localized("Current version: %@"), currentVersion)
+                    )
+                }
+            } catch {
+                updateAlert = UpdateAlert(
+                    title: localized("Unable to Check for Updates"),
+                    message: localized("codexStack could not reach GitHub Releases. Please try again later.")
+                )
+            }
+        }
+    }
+
+    private var appVersionText: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "0.1.0"
+        let build = info?["CFBundleVersion"] as? String ?? "1"
+        return String(format: localized("Version %@ (%@)"), version, build)
+    }
+
+    private var currentVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
+    }
+
+    private func compareVersions(_ lhs: String, _ rhs: String) -> ComparisonResult {
+        let left = versionComponents(lhs)
+        let right = versionComponents(rhs)
+        let count = max(left.count, right.count)
+        for index in 0..<count {
+            let lval = index < left.count ? left[index] : 0
+            let rval = index < right.count ? right[index] : 0
+            if lval > rval { return .orderedDescending }
+            if lval < rval { return .orderedAscending }
+        }
+        return .orderedSame
+    }
+
+    private func versionComponents(_ text: String) -> [Int] {
+        let cleaned = text.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
+        let parts = cleaned.split(separator: ".").map { part -> Int in
+            let digits = part.prefix { $0.isNumber }
+            return Int(digits) ?? 0
+        }
+        return parts.isEmpty ? [0] : parts
     }
 
     private func localized(_ key: String) -> String {
         NSLocalizedString(key, bundle: .module, comment: "")
     }
+}
 
-    @objc private func chooseDirectory() {
-        let panel = NSOpenPanel()
-        panel.prompt = "Choose"
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.canCreateDirectories = true
-        panel.allowsMultipleSelection = false
-        if let window = view.window {
-            panel.beginSheetModal(for: window) { [weak self] response in
-                guard response == .OK, let url = panel.url else { return }
-                self?.pathField.stringValue = url.path
+private struct SettingsLine<Accessory: View>: View {
+    let title: String
+    let subtitle: String?
+    @ViewBuilder let accessory: () -> Accessory
+
+    init(title: String, subtitle: String? = nil, @ViewBuilder accessory: @escaping () -> Accessory) {
+        self.title = title
+        self.subtitle = subtitle
+        self.accessory = accessory
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.callout.weight(.semibold))
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
             }
-        } else if panel.runModal() == .OK, let url = panel.url {
-            pathField.stringValue = url.path
+            Spacer(minLength: 24)
+            accessory()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 13)
+    }
+}
+
+private struct SettingsDivider: View {
+    var body: some View {
+        Divider()
+            .padding(.leading, 16)
+    }
+}
+
+private struct SettingsSwitch: View {
+    @Binding var isOn: Bool
+    let onChange: () -> Void
+
+    var body: some View {
+        Toggle("", isOn: $isOn)
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .onChange(of: isOn) { _ in onChange() }
+            .controlSize(.small)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(.thinMaterial, in: Capsule(style: .continuous))
+            .background(
+                Color(nsColor: .windowBackgroundColor).opacity(0.28),
+                in: Capsule(style: .continuous)
+            )
+            .overlay {
+                Capsule(style: .continuous)
+                    .stroke(Color.secondary.opacity(0.16), lineWidth: 1)
+            }
+        .accessibilityLabel("Show percentage text")
+        .accessibilityValue(isOn ? "On" : "Off")
+    }
+}
+
+private struct UpdateAlert: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
+}
+
+private func codexStackLogoImage(progressMode: UtilizationProgressMode) -> NSImage {
+    let candidates = [
+        Bundle.module.url(forResource: "codexStack-logo", withExtension: "png"),
+        Bundle.module.url(forResource: "codexStack-logo", withExtension: "png", subdirectory: "Assets"),
+    ]
+    for url in candidates.compactMap({ $0 }) {
+        if let image = NSImage(contentsOf: url) {
+            return image
         }
     }
+    return StatusIconRenderer.makeIcon(
+        sessionUsedRatio: 0.36,
+        weeklyUsedRatio: 0.72,
+        progressMode: progressMode
+    )
+}
 
-    @objc private func progressModeChanged() {
-        let index = progressControl.selectedSegment
-        guard UtilizationProgressMode.allCases.indices.contains(index) else { return }
-        progressMode = UtilizationProgressMode.allCases[index]
-        applyNonPathSettings()
+private struct GitHubRelease: Decodable {
+    let tagName: String
+    let htmlURL: String
+
+    var version: String {
+        tagName.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
     }
 
-    @objc private func showPercentageChanged() {
-        showMenuBarPercentage = showPercentageCheckbox.state == .on
-        applyNonPathSettings()
+    enum CodingKeys: String, CodingKey {
+        case tagName = "tag_name"
+        case htmlURL = "html_url"
     }
+}
 
-    @objc private func savePath() {
-        currentPath = pathField.stringValue
-        onSave(currentPath, progressMode, showMenuBarPercentage)
+private enum GitHubReleaseChecker {
+    static func fetchLatest() async throws -> GitHubRelease {
+        let url = URL(string: "https://api.github.com/repos/ocd0711/CodexStack/releases/latest")!
+        var request = URLRequest(url: url)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("codexStack", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let httpResponse = response as? HTTPURLResponse,
+           !(200..<300).contains(httpResponse.statusCode) {
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder().decode(GitHubRelease.self, from: data)
     }
-
-    private func applyNonPathSettings() {
-        onSave(currentPath, progressMode, showMenuBarPercentage)
-    }
-
 }
 
 @MainActor

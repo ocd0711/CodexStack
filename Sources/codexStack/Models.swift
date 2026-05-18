@@ -98,6 +98,35 @@ enum UtilizationProgressMode: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+enum RefreshInterval: Int, CaseIterable, Identifiable, Sendable {
+    case off = 0
+    case seconds30 = 30
+    case minute1 = 60
+    case minute5 = 300
+    case minute15 = 900
+
+    var id: Int { rawValue }
+
+    var seconds: TimeInterval? {
+        rawValue > 0 ? TimeInterval(rawValue) : nil
+    }
+
+    var label: String {
+        switch self {
+        case .off:
+            return NSLocalizedString("Off", bundle: .module, comment: "")
+        case .seconds30:
+            return NSLocalizedString("Every 30 seconds", bundle: .module, comment: "")
+        case .minute1:
+            return NSLocalizedString("Every 1 minute", bundle: .module, comment: "")
+        case .minute5:
+            return NSLocalizedString("Every 5 minutes", bundle: .module, comment: "")
+        case .minute15:
+            return NSLocalizedString("Every 15 minutes", bundle: .module, comment: "")
+        }
+    }
+}
+
 struct SessionMessage: Identifiable, Hashable, Sendable {
     let id = UUID()
     let role: SessionMessageRole

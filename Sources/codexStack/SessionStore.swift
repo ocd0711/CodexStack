@@ -13,6 +13,7 @@ final class SessionStore: ObservableObject {
     @Published var selectedProject: String = SessionStore.allProjectsLabel
     @Published var selectedIDs: Set<String> = []
     @Published var utilizationProgressMode: UtilizationProgressMode
+    @Published var refreshInterval: RefreshInterval
     @Published private(set) var codexRootPath: String
     @Published private(set) var usage: UsageSnapshot = .empty
     @Published private(set) var isRefreshing = false
@@ -21,14 +22,24 @@ final class SessionStore: ObservableObject {
     @Published private(set) var lastError: String?
     private var refreshTask: Task<Void, Never>?
     private var mutationTask: Task<Void, Never>?
+    private var autoRefreshTask: Task<Void, Never>?
 
     init(
         codexRootPath: String = SessionStore.defaultCodexRootPath(),
-        utilizationProgressMode: UtilizationProgressMode = .remaining
+        utilizationProgressMode: UtilizationProgressMode = .remaining,
+        refreshInterval: RefreshInterval = .off
     ) {
         self.codexRootPath = codexRootPath
         self.utilizationProgressMode = utilizationProgressMode
+        self.refreshInterval = refreshInterval
         refresh()
+        scheduleAutoRefresh()
+    }
+
+    deinit {
+        autoRefreshTask?.cancel()
+        refreshTask?.cancel()
+        mutationTask?.cancel()
     }
 
     var filteredSessions: [CodexSession] {
@@ -167,6 +178,12 @@ final class SessionStore: ObservableObject {
         utilizationProgressMode = newMode
     }
 
+    func updateRefreshInterval(_ newInterval: RefreshInterval) {
+        guard refreshInterval != newInterval else { return }
+        refreshInterval = newInterval
+        scheduleAutoRefresh()
+    }
+
     func clearError() {
         lastError = nil
     }
@@ -181,6 +198,29 @@ final class SessionStore: ObservableObject {
 
     private func localized(_ key: String) -> String {
         NSLocalizedString(key, bundle: .module, comment: "")
+    }
+
+    private func scheduleAutoRefresh() {
+        autoRefreshTask?.cancel()
+        guard let seconds = refreshInterval.seconds else {
+            autoRefreshTask = nil
+            return
+        }
+
+        autoRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                } catch {
+                    return
+                }
+
+                await MainActor.run {
+                    guard let self, !self.isBusy else { return }
+                    self.refresh()
+                }
+            }
+        }
     }
 
     private func runMutation(
