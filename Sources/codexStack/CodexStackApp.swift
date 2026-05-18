@@ -1017,10 +1017,7 @@ private struct UtilizationSection: View {
 
     private var accountSections: [UsageAccountSnapshot] {
         if !accounts.isEmpty {
-            guard let activeAccountID, let match = accounts.first(where: { $0.id == activeAccountID }) else {
-                return accounts
-            }
-            return [match] + accounts.filter { $0.id != activeAccountID }
+            return accounts
         }
         let fallback = UsageAccountSnapshot(
             id: usage.accountEmail ?? "primary",
