@@ -171,13 +171,23 @@ private struct MenuBarPanel: View {
     @State private var closePaneTask: Task<Void, Never>?
     @AppStorage("accountsSortOption") private var accountsSortRaw: String = AccountsSortOption.importedNewest.rawValue
     @AppStorage("accountsManualOrder") private var accountsManualOrderRaw: String = ""
+    @AppStorage("accountsPinActive") private var accountsPinActive: Bool = false
 
-    private var sortedAccounts: [UsageAccountSnapshot] {
+    private var rawSortedAccounts: [UsageAccountSnapshot] {
         let sortOption = AccountsSortOption(rawValue: accountsSortRaw) ?? .importedNewest
         let manualOrderIDs = accountsManualOrderRaw
             .split(separator: "\n", omittingEmptySubsequences: true)
             .map(String.init)
         return sortOption.sort(store.usage.accounts, manualOrder: manualOrderIDs)
+    }
+
+    private var sortedAccounts: [UsageAccountSnapshot] {
+        var accounts = rawSortedAccounts
+        if accountsPinActive, let activeID = activeAccountID, let index = accounts.firstIndex(where: { $0.id == activeID }), index != 0 {
+            let active = accounts.remove(at: index)
+            accounts.insert(active, at: 0)
+        }
+        return accounts
     }
 
     var body: some View {
@@ -272,7 +282,7 @@ private struct MenuBarPanel: View {
     }
 
     private var activeAccountID: String? {
-        store.preferredAccountID ?? sortedAccounts.first?.id
+        store.preferredAccountID ?? rawSortedAccounts.first?.id
     }
 
     private func accountMenuLabel(for account: UsageAccountSnapshot) -> String {
@@ -1555,6 +1565,7 @@ private struct SettingsWindowView: View {
     @State private var celebrateWeeklyReset: Bool
     @AppStorage("accountsSortOption") private var accountsSortRaw: String = AccountsSortOption.importedNewest.rawValue
     @AppStorage("accountsManualOrder") private var accountsManualOrderRaw: String = ""
+    @AppStorage("accountsPinActive") private var accountsPinActive: Bool = false
     let onSave: (String, UtilizationProgressMode, Bool, RefreshInterval, Bool) -> Void
     let onCelebrationChanged: (Bool, Bool) -> Void
     let onAccountsChanged: () -> Void
@@ -1816,6 +1827,15 @@ private struct SettingsWindowView: View {
                         }
                         .labelsHidden()
                         .frame(width: 200)
+                    }
+                    SettingsDivider()
+                    SettingsLine(
+                        title: localized("Pin Selected Account"),
+                        subtitle: localized("Always show the selected account first in the menu bar utilization section.")
+                    ) {
+                        SettingsSwitch(isOn: $accountsPinActive) {
+                            onAccountsChanged()
+                        }
                     }
                     SettingsDivider()
                     VStack(spacing: 0) {
