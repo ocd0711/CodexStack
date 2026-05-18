@@ -1550,6 +1550,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
     }
 }
 
+@MainActor
 private struct SettingsWindowView: View {
     @State private var selectedPane: SettingsPane = .general
     @State private var currentPath: String
