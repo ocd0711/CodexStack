@@ -266,11 +266,14 @@ final class SessionStore: ObservableObject {
         let sessionKey = "\(SessionStore.lastSessionResetSeenKey)_\(accountPrefix)"
         let weeklyKey = "\(SessionStore.lastWeeklyResetSeenKey)_\(accountPrefix)"
 
+        var triggeredSession = false
+        var triggeredWeekly = false
+
         if let newReset = newUsage.sessionResetAt {
             let lastSeen = defaults.object(forKey: sessionKey) as? Date
             if lastSeen == nil || newReset > lastSeen! {
-                if lastSeen != nil, celebrateSessionReset {
-                    onResetCelebration?(.session)
+                if let last = lastSeen, newReset.timeIntervalSince(last) > 3600, celebrateSessionReset {
+                    triggeredSession = true
                 }
                 defaults.set(newReset, forKey: sessionKey)
             }
@@ -279,11 +282,17 @@ final class SessionStore: ObservableObject {
         if let newReset = newUsage.weeklyResetAt {
             let lastSeen = defaults.object(forKey: weeklyKey) as? Date
             if lastSeen == nil || newReset > lastSeen! {
-                if lastSeen != nil, celebrateWeeklyReset {
-                    onResetCelebration?(.weekly)
+                if let last = lastSeen, newReset.timeIntervalSince(last) > 3600, celebrateWeeklyReset {
+                    triggeredWeekly = true
                 }
                 defaults.set(newReset, forKey: weeklyKey)
             }
+        }
+
+        if triggeredWeekly {
+            onResetCelebration?(.weekly)
+        } else if triggeredSession {
+            onResetCelebration?(.session)
         }
     }
 
