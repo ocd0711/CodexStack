@@ -1,5 +1,5 @@
 import Foundation
-
+import UserNotifications
 @MainActor
 final class SessionStore: ObservableObject {
     static let allProjectsLabel = "All Projects"
@@ -24,14 +24,23 @@ final class SessionStore: ObservableObject {
     @Published private(set) var codexRootPath: String
     @Published private(set) var usage: UsageSnapshot = .empty
     @Published private(set) var preferredAccountID: String?
+    @Published var autoSwitchEnabled: Bool
+    @Published var autoSwitchSessionThreshold: Double
+    @Published var autoSwitchWeeklyThreshold: Double
+    @Published var autoSwitchNotificationEnabled: Bool
     @Published var celebrateSessionReset: Bool
     @Published var celebrateWeeklyReset: Bool
     static let preferredAccountIDDefaultsKey = "preferredAccountID"
+    static let autoSwitchEnabledDefaultsKey = "autoSwitchEnabled"
+    static let autoSwitchSessionThresholdDefaultsKey = "autoSwitchSessionThreshold"
+    static let autoSwitchWeeklyThresholdDefaultsKey = "autoSwitchWeeklyThreshold"
+    static let autoSwitchNotificationEnabledDefaultsKey = "autoSwitchNotificationEnabled"
     static let celebrateSessionResetDefaultsKey = "celebrateSessionReset"
     static let celebrateWeeklyResetDefaultsKey = "celebrateWeeklyReset"
     private static let lastSessionResetSeenKey = "lastSessionResetSeen"
     private static let lastWeeklyResetSeenKey = "lastWeeklyResetSeen"
     var onResetCelebration: ((ResetCelebrationKind) -> Void)?
+    var onAutoSwitchPerformed: ((String) -> Void)?
     @Published private(set) var isRefreshing = false
     @Published private(set) var isMutating = false
     @Published private(set) var mutationMessage: String?
@@ -45,6 +54,10 @@ final class SessionStore: ObservableObject {
         utilizationProgressMode: UtilizationProgressMode = .remaining,
         refreshInterval: RefreshInterval = .off,
         preferredAccountID: String? = nil,
+        autoSwitchEnabled: Bool = false,
+        autoSwitchSessionThreshold: Double = 90.0,
+        autoSwitchWeeklyThreshold: Double = 90.0,
+        autoSwitchNotificationEnabled: Bool = true,
         celebrateSessionReset: Bool = true,
         celebrateWeeklyReset: Bool = true
     ) {
@@ -52,10 +65,18 @@ final class SessionStore: ObservableObject {
         self.utilizationProgressMode = utilizationProgressMode
         self.refreshInterval = refreshInterval
         self.preferredAccountID = preferredAccountID
+        self.autoSwitchEnabled = autoSwitchEnabled
+        self.autoSwitchSessionThreshold = autoSwitchSessionThreshold
+        self.autoSwitchWeeklyThreshold = autoSwitchWeeklyThreshold
+        self.autoSwitchNotificationEnabled = autoSwitchNotificationEnabled
         self.celebrateSessionReset = celebrateSessionReset
         self.celebrateWeeklyReset = celebrateWeeklyReset
         refresh()
         scheduleAutoRefresh()
+        
+        if Bundle.main.bundleIdentifier != nil {
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        }
     }
 
     deinit {
@@ -156,6 +177,7 @@ final class SessionStore: ObservableObject {
                     projects = snapshot.projects
                     detectResetCelebrations(in: snapshot.usage)
                     usage = snapshot.usage
+                    performAutoSwitchIfNeeded(for: snapshot.usage)
                     selectedIDs = selectedIDs.intersection(Set(sessions.map(\.id)))
                     if !projectOptions.contains(selectedProject) {
                         selectedProject = SessionStore.allProjectsLabel
@@ -163,6 +185,53 @@ final class SessionStore: ObservableObject {
                     lastError = nil
                 case let .failure(message):
                     lastError = message
+                }
+            }
+        }
+    }
+
+    private func performAutoSwitchIfNeeded(for newUsage: UsageSnapshot) {
+        guard autoSwitchEnabled else { return }
+        
+        let currentID = preferredAccountID ?? newUsage.accounts.first?.id
+        guard let currentAccount = newUsage.accounts.first(where: { $0.id == currentID }) else { return }
+        
+        let sessionPct = (currentAccount.sessionUsedRatio ?? 0) * 100
+        let weeklyPct = (currentAccount.weeklyUsedRatio ?? 0) * 100
+        
+        let triggersSession = sessionPct >= autoSwitchSessionThreshold
+        let triggersWeekly = weeklyPct >= autoSwitchWeeklyThreshold
+        
+        if triggersSession || triggersWeekly {
+            if let bestAccount = newUsage.accounts.filter({ $0.id != currentID }).min(by: { a, b in
+                let aMax = max((a.sessionUsedRatio ?? 0), (a.weeklyUsedRatio ?? 0))
+                let bMax = max((b.sessionUsedRatio ?? 0), (b.weeklyUsedRatio ?? 0))
+                return aMax < bMax
+            }) {
+                let bestSession = (bestAccount.sessionUsedRatio ?? 0) * 100
+                let bestWeekly = (bestAccount.weeklyUsedRatio ?? 0) * 100
+                if bestSession < autoSwitchSessionThreshold && bestWeekly < autoSwitchWeeklyThreshold {
+                    do {
+                        try syncToAuthJSON(accountID: bestAccount.id)
+                        setPreferredAccountID(bestAccount.id)
+                        
+                        if autoSwitchNotificationEnabled && Bundle.main.bundleIdentifier != nil {
+                            let content = UNMutableNotificationContent()
+                            content.title = NSLocalizedString("CodexStack Auto-Switch", bundle: .module, comment: "")
+                            let maxPct = max(sessionPct, weeklyPct)
+                            content.body = String.localizedStringWithFormat(
+                                NSLocalizedString("Switched to account %@ because current usage reached %.0f%%.", bundle: .module, comment: ""),
+                                bestAccount.name ?? bestAccount.email ?? "Codex", maxPct
+                            )
+                            content.sound = .default
+                            let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+                            UNUserNotificationCenter.current().add(request)
+                        }
+                        
+                        onAutoSwitchPerformed?(bestAccount.id)
+                    } catch {
+                        lastError = "Auto-switch failed: \(error.localizedDescription)"
+                    }
                 }
             }
         }
@@ -300,6 +369,7 @@ final class SessionStore: ObservableObject {
         guard preferredAccountID != newID else { return }
         preferredAccountID = newID
         UserDefaults.standard.set(newID, forKey: SessionStore.preferredAccountIDDefaultsKey)
+
         if let matching = usage.accounts.first(where: { $0.id == newID }) ?? usage.accounts.first {
             usage = UsageSnapshot(
                 updatedAt: matching.updatedAt ?? usage.updatedAt,
@@ -320,6 +390,33 @@ final class SessionStore: ObservableObject {
             )
         }
         refresh()
+    }
+
+    func syncToAuthJSON(accountID: String) throws {
+        guard let account = AccountCredentialStore.loadAccounts().first(where: { $0.id == accountID }) else {
+            throw NSError(domain: "codexStack", code: 404, userInfo: [NSLocalizedDescriptionKey: "Account details could not be loaded."])
+        }
+
+        let codexRoot = URL(fileURLWithPath: expandedPath(codexRootPath), isDirectory: true)
+        let authURL = codexRoot.appending(path: "auth.json")
+        
+        var tokens: [String: Any] = ["access_token": account.accessToken]
+        if let idToken = account.idToken { tokens["id_token"] = idToken }
+        if let refreshToken = account.refreshToken { tokens["refresh_token"] = refreshToken }
+        if let accountID = account.accountID { tokens["account_id"] = accountID }
+        
+        let formatter = ISO8601DateFormatter()
+        formatter.timeZone = TimeZone.current
+        
+        let dict: [String: Any] = [
+            "auth_mode": account.type == "codex" ? "chatgpt" : (account.type ?? "chatgpt"),
+            "OPENAI_API_KEY": NSNull(),
+            "tokens": tokens,
+            "last_refresh": formatter.string(from: Date())
+        ]
+
+        let data = try JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: authURL)
     }
 
     private func reorderAccounts(

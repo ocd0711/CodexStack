@@ -26,11 +26,19 @@ struct CodexStackApp: App {
         let preferredAccountID = UserDefaults.standard.string(forKey: SessionStore.preferredAccountIDDefaultsKey)
         let celebrateSession = (UserDefaults.standard.object(forKey: SessionStore.celebrateSessionResetDefaultsKey) as? Bool) ?? true
         let celebrateWeekly = (UserDefaults.standard.object(forKey: SessionStore.celebrateWeeklyResetDefaultsKey) as? Bool) ?? true
+        let autoSwitchEnabled = UserDefaults.standard.object(forKey: SessionStore.autoSwitchEnabledDefaultsKey) as? Bool ?? false
+        let autoSwitchSessionThreshold = UserDefaults.standard.object(forKey: SessionStore.autoSwitchSessionThresholdDefaultsKey) as? Double ?? 90.0
+        let autoSwitchWeeklyThreshold = UserDefaults.standard.object(forKey: SessionStore.autoSwitchWeeklyThresholdDefaultsKey) as? Double ?? 90.0
+        let autoSwitchNotificationEnabled = UserDefaults.standard.object(forKey: SessionStore.autoSwitchNotificationEnabledDefaultsKey) as? Bool ?? true
         let store = SessionStore(
             codexRootPath: saved,
             utilizationProgressMode: savedMode,
             refreshInterval: savedRefreshInterval,
             preferredAccountID: preferredAccountID,
+            autoSwitchEnabled: autoSwitchEnabled,
+            autoSwitchSessionThreshold: autoSwitchSessionThreshold,
+            autoSwitchWeeklyThreshold: autoSwitchWeeklyThreshold,
+            autoSwitchNotificationEnabled: autoSwitchNotificationEnabled,
             celebrateSessionReset: celebrateSession,
             celebrateWeeklyReset: celebrateWeekly
         )
@@ -54,6 +62,10 @@ struct CodexStackApp: App {
                         launchAtLogin: launchAtLogin,
                         celebrateSessionReset: store.celebrateSessionReset,
                         celebrateWeeklyReset: store.celebrateWeeklyReset,
+                        autoSwitchEnabled: store.autoSwitchEnabled,
+                        autoSwitchSessionThreshold: store.autoSwitchSessionThreshold,
+                        autoSwitchWeeklyThreshold: store.autoSwitchWeeklyThreshold,
+                        autoSwitchNotificationEnabled: store.autoSwitchNotificationEnabled,
                         onSave: { newPath, progressMode, showPercentage, refreshInterval, launchAtLoginEnabled in
                         let expanded = NSString(string: newPath).expandingTildeInPath
                         UserDefaults.standard.set(expanded, forKey: Self.codexRootPathDefaultsKey)
@@ -78,6 +90,16 @@ struct CodexStackApp: App {
                         },
                         onAccountsChanged: {
                             store.refresh()
+                        },
+                        onAutoSwitchChanged: { enabled, sessionThreshold, weeklyThreshold, notifEnabled in
+                            UserDefaults.standard.set(enabled, forKey: SessionStore.autoSwitchEnabledDefaultsKey)
+                            UserDefaults.standard.set(sessionThreshold, forKey: SessionStore.autoSwitchSessionThresholdDefaultsKey)
+                            UserDefaults.standard.set(weeklyThreshold, forKey: SessionStore.autoSwitchWeeklyThresholdDefaultsKey)
+                            UserDefaults.standard.set(notifEnabled, forKey: SessionStore.autoSwitchNotificationEnabledDefaultsKey)
+                            store.autoSwitchEnabled = enabled
+                            store.autoSwitchSessionThreshold = sessionThreshold
+                            store.autoSwitchWeeklyThreshold = weeklyThreshold
+                            store.autoSwitchNotificationEnabled = notifEnabled
                         }
                     )
                 }
@@ -162,6 +184,7 @@ private enum MenuDrilldownPane {
 
 private struct MenuBarPanel: View {
     @EnvironmentObject private var store: SessionStore
+    @Environment(\.dismiss) private var dismiss
     let onOpenSettings: () -> Void
     @State private var activePane: MenuDrilldownPane = .none
     @State private var hoveredCostDayID: TimeInterval?
@@ -247,8 +270,8 @@ private struct MenuBarPanel: View {
     @ViewBuilder
     private var accountSwitcher: some View {
         let accounts = sortedAccounts
-        if accounts.count > 1 {
-            Menu {
+        Menu {
+            if accounts.count > 1 {
                 ForEach(accounts) { account in
                     Button {
                         store.setPreferredAccountID(account.id)
@@ -260,25 +283,33 @@ private struct MenuBarPanel: View {
                         }
                     }
                 }
-            } label: {
-                HStack(spacing: 4) {
-                    Text(accountLabel)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Image(systemName: "chevron.down")
-                        .font(.caption2)
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                Divider()
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-        } else {
-            Text(accountLabel)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Button {
+                do {
+                    if let activeID = activeAccountID {
+                        try store.syncToAuthJSON(accountID: activeID)
+                    }
+                } catch {
+                    NSSound.beep()
+                }
+            } label: {
+                Label("Sync to auth.json", systemImage: "arrow.triangle.2.circlepath")
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(accountLabel)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "chevron.down")
+                    .font(.caption2)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
     }
 
     private var activeAccountID: String? {
@@ -621,6 +652,7 @@ private struct MenuBarPanel: View {
         HStack {
             Button("Open Manager") {
                 ManagerWindowController.shared.show(with: store)
+                dismiss()
             }
             Button("Refresh") {
                 store.refresh()
@@ -631,6 +663,7 @@ private struct MenuBarPanel: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                     onOpenSettings()
                 }
+                dismiss()
             }
             Spacer()
             Button("Quit") {
@@ -1436,9 +1469,14 @@ final class SettingsWindowController: NSWindowController {
         launchAtLogin: Bool,
         celebrateSessionReset: Bool,
         celebrateWeeklyReset: Bool,
+        autoSwitchEnabled: Bool,
+        autoSwitchSessionThreshold: Double,
+        autoSwitchWeeklyThreshold: Double,
+        autoSwitchNotificationEnabled: Bool,
         onSave: @escaping (String, UtilizationProgressMode, Bool, RefreshInterval, Bool) -> Void,
         onCelebrationChanged: @escaping (Bool, Bool) -> Void = { _, _ in },
-        onAccountsChanged: @escaping () -> Void = {}
+        onAccountsChanged: @escaping () -> Void = {},
+        onAutoSwitchChanged: @escaping (Bool, Double, Double, Bool) -> Void = { _, _, _, _ in }
     ) {
         DispatchQueue.main.async { [weak self] in
             self?.dismissTransientMenuWindows()
@@ -1451,9 +1489,14 @@ final class SettingsWindowController: NSWindowController {
                     launchAtLogin: launchAtLogin,
                     celebrateSessionReset: celebrateSessionReset,
                     celebrateWeeklyReset: celebrateWeeklyReset,
+                    autoSwitchEnabled: autoSwitchEnabled,
+                    autoSwitchSessionThreshold: autoSwitchSessionThreshold,
+                    autoSwitchWeeklyThreshold: autoSwitchWeeklyThreshold,
+                    autoSwitchNotificationEnabled: autoSwitchNotificationEnabled,
                     onSave: onSave,
                     onCelebrationChanged: onCelebrationChanged,
-                    onAccountsChanged: onAccountsChanged
+                    onAccountsChanged: onAccountsChanged,
+                    onAutoSwitchChanged: onAutoSwitchChanged
                 )
             }
         }
@@ -1476,9 +1519,14 @@ final class SettingsWindowController: NSWindowController {
         launchAtLogin: Bool,
         celebrateSessionReset: Bool,
         celebrateWeeklyReset: Bool,
+        autoSwitchEnabled: Bool,
+        autoSwitchSessionThreshold: Double,
+        autoSwitchWeeklyThreshold: Double,
+        autoSwitchNotificationEnabled: Bool,
         onSave: @escaping (String, UtilizationProgressMode, Bool, RefreshInterval, Bool) -> Void,
         onCelebrationChanged: @escaping (Bool, Bool) -> Void,
-        onAccountsChanged: @escaping () -> Void
+        onAccountsChanged: @escaping () -> Void,
+        onAutoSwitchChanged: @escaping (Bool, Double, Double, Bool) -> Void
     ) {
         let settingsView = SettingsWindowView(
             currentPath: currentPath,
@@ -1488,9 +1536,14 @@ final class SettingsWindowController: NSWindowController {
             launchAtLogin: launchAtLogin,
             celebrateSessionReset: celebrateSessionReset,
             celebrateWeeklyReset: celebrateWeeklyReset,
+            autoSwitchEnabled: autoSwitchEnabled,
+            autoSwitchSessionThreshold: autoSwitchSessionThreshold,
+            autoSwitchWeeklyThreshold: autoSwitchWeeklyThreshold,
+            autoSwitchNotificationEnabled: autoSwitchNotificationEnabled,
             onSave: onSave,
             onCelebrationChanged: onCelebrationChanged,
-            onAccountsChanged: onAccountsChanged
+            onAccountsChanged: onAccountsChanged,
+            onAutoSwitchChanged: onAutoSwitchChanged
         )
         let hostingController: NSHostingController<SettingsWindowView>
         if let existing = settingsHostingController {
@@ -1577,12 +1630,17 @@ private struct SettingsWindowView: View {
     @State private var accountAlert: UpdateAlert?
     @State private var celebrateSessionReset: Bool
     @State private var celebrateWeeklyReset: Bool
+    @State private var autoSwitchEnabled: Bool
+    @State private var autoSwitchSessionThreshold: Double
+    @State private var autoSwitchWeeklyThreshold: Double
+    @State private var autoSwitchNotificationEnabled: Bool
     @AppStorage("accountsSortOption") private var accountsSortRaw: String = AccountsSortOption.importedNewest.rawValue
     @AppStorage("accountsManualOrder") private var accountsManualOrderRaw: String = ""
     @AppStorage("accountsPinActive") private var accountsPinActive: Bool = false
     let onSave: (String, UtilizationProgressMode, Bool, RefreshInterval, Bool) -> Void
     let onCelebrationChanged: (Bool, Bool) -> Void
     let onAccountsChanged: () -> Void
+    let onAutoSwitchChanged: (Bool, Double, Double, Bool) -> Void
 
     init(
         currentPath: String,
@@ -1592,9 +1650,14 @@ private struct SettingsWindowView: View {
         launchAtLogin: Bool,
         celebrateSessionReset: Bool = true,
         celebrateWeeklyReset: Bool = true,
+        autoSwitchEnabled: Bool = false,
+        autoSwitchSessionThreshold: Double = 90.0,
+        autoSwitchWeeklyThreshold: Double = 90.0,
+        autoSwitchNotificationEnabled: Bool = true,
         onSave: @escaping (String, UtilizationProgressMode, Bool, RefreshInterval, Bool) -> Void,
         onCelebrationChanged: @escaping (Bool, Bool) -> Void = { _, _ in },
-        onAccountsChanged: @escaping () -> Void = {}
+        onAccountsChanged: @escaping () -> Void = {},
+        onAutoSwitchChanged: @escaping (Bool, Double, Double, Bool) -> Void = { _, _, _, _ in }
     ) {
         _currentPath = State(initialValue: currentPath)
         _progressMode = State(initialValue: currentProgressMode)
@@ -1603,9 +1666,14 @@ private struct SettingsWindowView: View {
         _launchAtLogin = State(initialValue: launchAtLogin)
         _celebrateSessionReset = State(initialValue: celebrateSessionReset)
         _celebrateWeeklyReset = State(initialValue: celebrateWeeklyReset)
+        _autoSwitchEnabled = State(initialValue: autoSwitchEnabled)
+        _autoSwitchSessionThreshold = State(initialValue: autoSwitchSessionThreshold)
+        _autoSwitchWeeklyThreshold = State(initialValue: autoSwitchWeeklyThreshold)
+        _autoSwitchNotificationEnabled = State(initialValue: autoSwitchNotificationEnabled)
         self.onSave = onSave
         self.onCelebrationChanged = onCelebrationChanged
         self.onAccountsChanged = onAccountsChanged
+        self.onAutoSwitchChanged = onAutoSwitchChanged
     }
 
     var body: some View {
@@ -1838,6 +1906,54 @@ private struct SettingsWindowView: View {
                         }
                     }
                     SettingsDivider()
+                    SettingsLine(
+                        title: localized("Auto-Switch Accounts"),
+                        subtitle: localized("Automatically switch to the account with the lowest usage when the current account reaches a specified percentage limit.")
+                    ) {
+                        SettingsSwitch(isOn: $autoSwitchEnabled) {
+                            onAutoSwitchChanged(autoSwitchEnabled, autoSwitchSessionThreshold, autoSwitchWeeklyThreshold, autoSwitchNotificationEnabled)
+                        }
+                    }
+                    if autoSwitchEnabled {
+                        SettingsDivider()
+                        SettingsLine(
+                            title: localized("Session Limit Threshold"),
+                            subtitle: localized("Switch when the current account's 5h session limit reaches this percentage.")
+                        ) {
+                            HStack {
+                                Slider(value: $autoSwitchSessionThreshold, in: 1...100, step: 1) { _ in
+                                    onAutoSwitchChanged(autoSwitchEnabled, autoSwitchSessionThreshold, autoSwitchWeeklyThreshold, autoSwitchNotificationEnabled)
+                                }
+                                .frame(width: 150)
+                                Text("\(Int(autoSwitchSessionThreshold))%")
+                                    .frame(width: 40, alignment: .trailing)
+                            }
+                        }
+                        SettingsDivider()
+                        SettingsLine(
+                            title: localized("Weekly Limit Threshold"),
+                            subtitle: localized("Switch when the current account's weekly limit reaches this percentage.")
+                        ) {
+                            HStack {
+                                Slider(value: $autoSwitchWeeklyThreshold, in: 1...100, step: 1) { _ in
+                                    onAutoSwitchChanged(autoSwitchEnabled, autoSwitchSessionThreshold, autoSwitchWeeklyThreshold, autoSwitchNotificationEnabled)
+                                }
+                                .frame(width: 150)
+                                Text("\(Int(autoSwitchWeeklyThreshold))%")
+                                    .frame(width: 40, alignment: .trailing)
+                            }
+                        }
+                        SettingsDivider()
+                        SettingsLine(
+                            title: localized("Auto-Switch Notifications"),
+                            subtitle: localized("Show a macOS notification when an automatic switch occurs.")
+                        ) {
+                            SettingsSwitch(isOn: $autoSwitchNotificationEnabled) {
+                                onAutoSwitchChanged(autoSwitchEnabled, autoSwitchSessionThreshold, autoSwitchWeeklyThreshold, autoSwitchNotificationEnabled)
+                            }
+                        }
+                    }
+                    SettingsDivider()
                     VStack(spacing: 0) {
                         let rows = sortedImportedAccounts
                         let isManual = accountsSortOption == .manual
@@ -1979,10 +2095,22 @@ private struct SettingsWindowView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Button(localized("Remove"), role: .destructive) {
-                removeAccount(id: account.id)
+            Menu {
+                Button(localized("Sync to Codex (auth.json)")) {
+                    syncToAuthJSON(id: account.id)
+                }
+                Button(localized("Export Configuration...")) {
+                    exportAccount(id: account.id)
+                }
+                Button(localized("Remove"), role: .destructive) {
+                    removeAccount(id: account.id)
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
             }
-            .buttonStyle(.borderless)
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 32)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -2090,6 +2218,112 @@ private struct SettingsWindowView: View {
         } catch {
             accountAlert = UpdateAlert(
                 title: localized("Unable to Remove Account"),
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    private func exportAccount(id: String) {
+        guard let account = AccountCredentialStore.loadAccounts().first(where: { $0.id == id }) else {
+            accountAlert = UpdateAlert(
+                title: localized("Export Failed"),
+                message: localized("Account details could not be loaded.")
+            )
+            return
+        }
+
+        let panel = NSSavePanel()
+        panel.prompt = localized("Export")
+        let defaultName = account.email ?? account.accountID ?? "codex-account"
+        panel.nameFieldStringValue = "\(defaultName).json"
+        panel.allowedContentTypes = [.json]
+        
+        let formatButton = NSPopUpButton()
+        formatButton.addItems(withTitles: [localized("Codex Format"), localized("cliproxyapi Format")])
+        
+        let accessoryView = NSView(frame: NSRect(x: 0, y: 0, width: 250, height: 24))
+        let label = NSTextField(labelWithString: localized("Format:"))
+        label.frame = NSRect(x: 0, y: 3, width: 60, height: 16)
+        formatButton.frame = NSRect(x: 65, y: 0, width: 180, height: 24)
+        accessoryView.addSubview(label)
+        accessoryView.addSubview(formatButton)
+        
+        panel.accessoryView = accessoryView
+        
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        var dict: [String: Any] = [:]
+        
+        if formatButton.indexOfSelectedItem == 0 {
+            // Codex Format
+            var tokens: [String: Any] = ["access_token": account.accessToken]
+            if let idToken = account.idToken { tokens["id_token"] = idToken }
+            if let refreshToken = account.refreshToken { tokens["refresh_token"] = refreshToken }
+            if let accountID = account.accountID { tokens["account_id"] = accountID }
+            
+            let formatter = ISO8601DateFormatter()
+            formatter.timeZone = TimeZone.current
+            
+            dict["auth_mode"] = account.type == "codex" ? "chatgpt" : (account.type ?? "chatgpt")
+            dict["OPENAI_API_KEY"] = NSNull()
+            dict["tokens"] = tokens
+            dict["last_refresh"] = formatter.string(from: Date())
+        } else {
+            // cliproxyapi Format
+            dict["access_token"] = account.accessToken
+            if let idToken = account.idToken { dict["id_token"] = idToken }
+            if let refreshToken = account.refreshToken { dict["refresh_token"] = refreshToken }
+            if let email = account.email { dict["email"] = email }
+            if let note = account.note { dict["note"] = note }
+            if let accountID = account.accountID { dict["account_id"] = accountID }
+            dict["type"] = account.type ?? "codex"
+        }
+
+        do {
+            let data = try JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: url)
+        } catch {
+            accountAlert = UpdateAlert(
+                title: localized("Export Failed"),
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    private func syncToAuthJSON(id: String) {
+        guard let account = AccountCredentialStore.loadAccounts().first(where: { $0.id == id }) else {
+            accountAlert = UpdateAlert(
+                title: localized("Sync Failed"),
+                message: localized("Account details could not be loaded.")
+            )
+            return
+        }
+
+        let codexRoot = URL(fileURLWithPath: NSString(string: currentPath).expandingTildeInPath, isDirectory: true)
+        let authURL = codexRoot.appending(path: "auth.json")
+        
+        var tokens: [String: Any] = ["access_token": account.accessToken]
+        if let idToken = account.idToken { tokens["id_token"] = idToken }
+        if let refreshToken = account.refreshToken { tokens["refresh_token"] = refreshToken }
+        
+        var dict: [String: Any] = [
+            "type": account.type ?? "codex",
+            "tokens": tokens
+        ]
+        if let email = account.email { dict["email"] = email }
+        if let note = account.note { dict["note"] = note }
+        if let accountID = account.accountID { dict["account_id"] = accountID }
+
+        do {
+            let data = try JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: authURL)
+            accountAlert = UpdateAlert(
+                title: localized("Sync Successful"),
+                message: localized("The credentials have been written to auth.json successfully.")
+            )
+        } catch {
+            accountAlert = UpdateAlert(
+                title: localized("Sync Failed"),
                 message: error.localizedDescription
             )
         }
@@ -2275,17 +2509,6 @@ private struct SettingsSwitch: View {
             .toggleStyle(.switch)
             .onChange(of: isOn) { _ in onChange() }
             .controlSize(.small)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(.thinMaterial, in: Capsule(style: .continuous))
-            .background(
-                Color(nsColor: .windowBackgroundColor).opacity(0.28),
-                in: Capsule(style: .continuous)
-            )
-            .overlay {
-                Capsule(style: .continuous)
-                    .stroke(Color.secondary.opacity(0.16), lineWidth: 1)
-            }
         .accessibilityLabel("Show percentage text")
         .accessibilityValue(isOn ? "On" : "Off")
     }
