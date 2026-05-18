@@ -8,6 +8,7 @@ final class SessionStore: ObservableObject {
     }
 
     @Published private(set) var sessions: [CodexSession] = []
+    @Published private(set) var projects: [CodexProject] = []
     @Published var searchText: String = ""
     @Published var scope: SessionScope = .active {
         didSet {
@@ -87,12 +88,17 @@ final class SessionStore: ObservableObject {
     }
 
     var projectOptions: [String] {
-        let names = Set(sessions.map(\.projectName))
+        var names = Set(sessions.map(\.projectName))
+        names.formUnion(projects.map(\.name))
         return [SessionStore.allProjectsLabel] + names.sorted()
     }
 
     var projectMoveTargets: [ProjectMoveTarget] {
         var targetsByPath: [String: ProjectMoveTarget] = [:]
+
+        for project in projects {
+            targetsByPath[project.path] = ProjectMoveTarget(name: project.name, path: project.path)
+        }
 
         for session in sessions {
             guard let projectPath = session.projectPath, !projectPath.isEmpty else {
@@ -131,6 +137,7 @@ final class SessionStore: ObservableObject {
                 switch result {
                 case let .success(snapshot):
                     sessions = snapshot.sessions
+                    projects = snapshot.projects
                     usage = snapshot.usage
                     selectedIDs = selectedIDs.intersection(Set(sessions.map(\.id)))
                     if !projectOptions.contains(selectedProject) {
@@ -168,7 +175,15 @@ final class SessionStore: ObservableObject {
 
     func trashProject(named projectName: String) {
         runMutation(
-            .trashProject(projectName: projectName),
+            .trashProject(projectPath: nil, projectName: projectName),
+            message: localized("mutation.removing_project"),
+            clearSelectionOnSuccess: true
+        )
+    }
+
+    func trashProject(path projectPath: String) {
+        runMutation(
+            .trashProject(projectPath: projectPath, projectName: nil),
             message: localized("mutation.removing_project"),
             clearSelectionOnSuccess: true
         )
@@ -289,6 +304,7 @@ final class SessionStore: ObservableObject {
                     switch refreshResult {
                     case let .success(snapshot):
                         sessions = snapshot.sessions
+                        projects = snapshot.projects
                         usage = snapshot.usage
                         if clearSelectionOnSuccess {
                             selectedIDs.removeAll()
@@ -314,10 +330,12 @@ final class SessionStore: ObservableObject {
             let service = CodexSessionService(codexRoot: URL(fileURLWithPath: codexRootPath, isDirectory: true))
             try service.reconcileSessionIndex()
             let sessions = try service.loadSessions()
+            let projects = service.loadProjects(including: sessions)
             let usage = UsageMetricsService().loadUsageSnapshot(codexRoot: service.codexRootURL)
             return .success(
                 RefreshSnapshot(
                     sessions: sessions,
+                    projects: projects,
                     usage: usage
                 )
             )
@@ -345,9 +363,19 @@ final class SessionStore: ObservableObject {
             case let .trash(ids):
                 let targets = ids.compactMap { byID[$0] }
                 try service.trash(targets)
-            case let .trashProject(projectName):
-                let targets = allSessions.filter { $0.projectName == projectName }
+            case let .trashProject(projectPath, projectName):
+                let targets: [CodexSession]
+                if let projectPath {
+                    targets = allSessions.filter { $0.projectPath == projectPath }
+                } else if let projectName {
+                    targets = allSessions.filter { $0.projectName == projectName && !$0.isChatsProject }
+                } else {
+                    targets = []
+                }
                 try service.trash(targets)
+                if let projectPath {
+                    _ = try service.removeSavedWorkspaceRoot(projectPath)
+                }
             case let .rename(id, newTitle):
                 try service.renameSession(id: id, newTitle: newTitle)
             case let .move(ids, projectPath):
@@ -363,6 +391,7 @@ final class SessionStore: ObservableObject {
 
 private struct RefreshSnapshot: Sendable {
     let sessions: [CodexSession]
+    let projects: [CodexProject]
     let usage: UsageSnapshot
 }
 
@@ -380,7 +409,7 @@ private enum SessionMutation: Sendable {
     case archive(ids: Set<String>)
     case unarchive(ids: Set<String>)
     case trash(ids: Set<String>)
-    case trashProject(projectName: String)
+    case trashProject(projectPath: String?, projectName: String?)
     case rename(id: String, newTitle: String)
     case move(ids: Set<String>, projectPath: String?)
 }

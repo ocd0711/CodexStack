@@ -96,6 +96,8 @@
 "Back" = "Back";
 "Search title or session id" = "Search title or session id";
 "Scope" = "Scope";
+"No chats in this scope" = "No chats in this scope";
+"Select Project Sessions" = "Select Project Sessions";
 "Move to Trash" = "Move to Trash";
 "Move..." = "Move...";
 "Move" = "Move";
@@ -106,7 +108,9 @@
 "Operation Failed" = "Operation Failed";
 "Move selected session files to Trash?" = "Move selected session files to Trash?";
 "Move all sessions in this project to Trash?" = "Move all sessions in this project to Trash?";
+"Remove this project from Codex?" = "Remove this project from Codex?";
 "Move Project to Trash" = "Move Project to Trash";
+"Remove Project" = "Remove Project";
 "Session Details" = "Session Details";
 "Title" = "Title";
 "Session ID" = "Session ID";

@@ -5,6 +5,8 @@ struct MainWindowView: View {
     @State private var showTrashConfirm = false
     @State private var showProjectTrashConfirm = false
     @State private var pendingProjectName: String?
+    @State private var pendingProjectPath: String?
+    @State private var pendingProjectSessionCount = 0
     @State private var expandedProjects: Set<String> = []
     @State private var movePrompt: MoveProjectPrompt?
 
@@ -33,17 +35,55 @@ struct MainWindowView: View {
     }
 
     private var groupedSessions: [ProjectSessionGroup] {
-        let grouped = Dictionary(grouping: store.filteredSessions, by: \.projectName)
-        let mapped = grouped.map { name, sessions -> ProjectSessionGroup in
-            let sortedSessions = sessions.sorted { $0.updatedAt > $1.updatedAt }
+        let visibleSessions = store.filteredSessions
+        let visibleByProjectID = Dictionary(grouping: visibleSessions, by: \.projectID)
+        let allByProjectID = Dictionary(grouping: store.sessions, by: \.projectID)
+        let projectSource = store.searchText.isEmpty ? store.sessions : visibleSessions
+        var grouped = Dictionary(grouping: projectSource, by: \.projectID)
+
+        for project in store.projects where shouldIncludeProject(project, visibleByProjectID: visibleByProjectID) {
+            if grouped[project.id] == nil {
+                grouped[project.id] = []
+            }
+        }
+
+        let mapped = grouped.compactMap { projectID, sourceSessions -> ProjectSessionGroup? in
+            if let first = sourceSessions.first {
+                let visible = (visibleByProjectID[first.projectID] ?? []).sorted { $0.updatedAt > $1.updatedAt }
+                return ProjectSessionGroup(
+                    id: first.projectID,
+                    name: first.projectName,
+                    projectPath: first.projectPath,
+                    sessions: visible,
+                    totalCount: (allByProjectID[first.projectID] ?? sourceSessions).count,
+                    latest: (allByProjectID[first.projectID] ?? sourceSessions).map(\.updatedAt).max() ?? .distantPast
+                )
+            }
+
+            guard let project = store.projects.first(where: { $0.id == projectID }) else {
+                return nil
+            }
             return ProjectSessionGroup(
-                id: name,
-                name: name,
-                sessions: sortedSessions,
-                latest: sortedSessions.first?.updatedAt ?? .distantPast
+                id: project.id,
+                name: project.name,
+                projectPath: project.path,
+                sessions: visibleByProjectID[project.id] ?? [],
+                totalCount: allByProjectID[project.id]?.count ?? 0,
+                latest: allByProjectID[project.id]?.map(\.updatedAt).max() ?? .distantPast
             )
         }
         return mapped.sorted { $0.latest > $1.latest }
+    }
+
+    private func shouldIncludeProject(
+        _ project: CodexProject,
+        visibleByProjectID: [String: [CodexSession]]
+    ) -> Bool {
+        if store.searchText.isEmpty { return true }
+        if visibleByProjectID[project.id]?.isEmpty == false { return true }
+
+        let query = store.searchText.lowercased()
+        return project.name.lowercased().contains(query) || project.path.lowercased().contains(query)
     }
 
     var body: some View {
@@ -76,18 +116,22 @@ struct MainWindowView: View {
             }
         }
         .confirmationDialog(
-            "Move all sessions in this project to Trash?",
+            pendingProjectSessionCount == 0 ? "Remove this project from Codex?" : "Move all sessions in this project to Trash?",
             isPresented: $showProjectTrashConfirm,
             titleVisibility: .visible
         ) {
-            Button("Move Project to Trash", role: .destructive) {
-                if let pendingProjectName {
-                    store.trashProject(named: pendingProjectName)
+            Button(pendingProjectSessionCount == 0 ? "Remove Project" : "Move Project to Trash", role: .destructive) {
+                if let pendingProjectPath {
+                    store.trashProject(path: pendingProjectPath)
                 }
                 pendingProjectName = nil
+                pendingProjectPath = nil
+                pendingProjectSessionCount = 0
             }
             Button("Cancel", role: .cancel) {
                 pendingProjectName = nil
+                pendingProjectPath = nil
+                pendingProjectSessionCount = 0
             }
         } message: {
             if let pendingProjectName {
@@ -133,9 +177,6 @@ struct MainWindowView: View {
             for id in idSet where !expandedProjects.contains(id) {
                 expandedProjects.insert(id)
             }
-        }
-        .onChange(of: store.scope) { _ in
-            store.clearSelection()
         }
     }
 
@@ -263,14 +304,22 @@ struct MainWindowView: View {
                     DisclosureGroup(
                         isExpanded: expansionBinding(for: group.id),
                         content: {
-                            ForEach(group.sessions) { session in
-                                HStack(spacing: 8) {
-                                    SessionRow(session: session)
-                                    Spacer(minLength: 6)
-                                    sessionMenu(session)
+                            if group.sessions.isEmpty {
+                                Text("No chats in this scope")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .padding(.leading, 24)
+                                    .padding(.vertical, 8)
+                            } else {
+                                ForEach(group.sessions) { session in
+                                    HStack(spacing: 8) {
+                                        SessionRow(session: session)
+                                        Spacer(minLength: 6)
+                                        sessionMenu(session)
+                                    }
+                                    .tag(session.id)
+                                    .help(session.title)
                                 }
-                                .tag(session.id)
-                                .help(session.title)
                             }
                         },
                         label: {
@@ -280,8 +329,12 @@ struct MainWindowView: View {
                                     store.selectedIDs = Set(group.sessions.map(\.id))
                                 },
                                 onTrash: {
-                                    pendingProjectName = group.name
-                                    showProjectTrashConfirm = true
+                                    if !group.isChatsProject {
+                                        pendingProjectName = group.name
+                                        pendingProjectPath = group.projectPath
+                                        pendingProjectSessionCount = group.totalCount
+                                        showProjectTrashConfirm = true
+                                    }
                                 }
                             )
                         }
@@ -374,8 +427,14 @@ struct MainWindowView: View {
 private struct ProjectSessionGroup: Identifiable {
     let id: String
     let name: String
+    let projectPath: String?
     let sessions: [CodexSession]
+    let totalCount: Int
     let latest: Date
+
+    var isChatsProject: Bool {
+        projectPath == nil || projectPath?.isEmpty == true
+    }
 }
 
 private struct MoveProjectPrompt: Identifiable {
@@ -510,7 +569,10 @@ private struct ProjectHeaderRow: View {
 
             Menu {
                 Button("Select Project Sessions", action: onSelect)
-                Button("Move Project to Trash", role: .destructive, action: onTrash)
+                    .disabled(group.sessions.isEmpty)
+                if !group.isChatsProject {
+                    Button("Move Project to Trash", role: .destructive, action: onTrash)
+                }
             } label: {
                 Image(systemName: "ellipsis.circle")
                     .foregroundStyle(.secondary)

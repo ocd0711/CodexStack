@@ -291,7 +291,7 @@ private struct MenuBarPanel: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
-                if store.sessions.isEmpty {
+                if groupedProjects().isEmpty {
                     Text("No sessions found")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -421,7 +421,7 @@ private struct MenuBarPanel: View {
                 .foregroundStyle(.secondary)
             }
 
-            if store.sessions.isEmpty {
+            if groupedProjects().isEmpty {
                 Text("No sessions found")
                     .foregroundStyle(.secondary)
                     .font(.caption)
@@ -441,14 +441,16 @@ private struct MenuBarPanel: View {
                                     Text("\(project.sessions.count)")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
-                                    Menu {
-                                        Button("Remove Project...", role: .destructive) {
-                                            confirmProjectDeletion(projectName: project.projectName)
+                                    if !project.isChatsProject {
+                                        Menu {
+                                            Button("Remove Project...", role: .destructive) {
+                                                confirmProjectDeletion(project: project)
+                                            }
+                                        } label: {
+                                            Image(systemName: "ellipsis.circle")
                                         }
-                                    } label: {
-                                        Image(systemName: "ellipsis.circle")
+                                        .buttonStyle(.plain)
                                     }
-                                    .buttonStyle(.plain)
                                 }
 
                                 ForEach(project.sessions) { session in
@@ -487,6 +489,12 @@ private struct MenuBarPanel: View {
                                         }
                                         .buttonStyle(.plain)
                                     }
+                                }
+                                if project.sessions.isEmpty {
+                                    Text("No chats in this scope")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
                                 }
                             }
                             .padding(8)
@@ -578,13 +586,30 @@ private struct MenuBarPanel: View {
 
     private func groupedProjects() -> [ProjectMenuGroup] {
         let recent = store.sessions.sorted { $0.updatedAt > $1.updatedAt }
-        let grouped = Dictionary(grouping: recent, by: \.projectName)
-        let groups = grouped.map { key, value in
-            ProjectMenuGroup(
-                id: key,
-                projectName: key,
+        var grouped = Dictionary(grouping: recent, by: \.projectID)
+        for project in store.projects {
+            if grouped[project.id] == nil {
+                grouped[project.id] = []
+            }
+        }
+
+        let groups = grouped.compactMap { _, value -> ProjectMenuGroup? in
+            guard let first = value.first else { return nil }
+            return ProjectMenuGroup(
+                id: first.projectID,
+                projectName: first.projectName,
+                projectPath: first.projectPath,
                 latest: value.first?.updatedAt ?? .distantPast,
                 sessions: value
+            )
+        } + store.projects.compactMap { project -> ProjectMenuGroup? in
+            guard grouped[project.id]?.isEmpty == true else { return nil }
+            return ProjectMenuGroup(
+                id: project.id,
+                projectName: project.name,
+                projectPath: project.path,
+                latest: .distantPast,
+                sessions: []
             )
         }
         return groups.sorted { $0.latest > $1.latest }
@@ -626,17 +651,26 @@ private struct MenuBarPanel: View {
         return formatter.string(from: NSNumber(value: value)) ?? "$0.00"
     }
 
-    private func confirmProjectDeletion(projectName: String) {
+    private func confirmProjectDeletion(project: ProjectMenuGroup) {
+        guard let projectPath = project.projectPath else { return }
         let message = String.localizedStringWithFormat(
             NSLocalizedString("Project: %@", bundle: .module, comment: ""),
-            projectName
+            project.projectName
         )
         if DialogPresenter.confirmDestructive(
-            title: NSLocalizedString("Delete all conversations in this project?", bundle: .module, comment: ""),
+            title: NSLocalizedString(
+                project.sessions.isEmpty ? "Remove this project from Codex?" : "Delete all conversations in this project?",
+                bundle: .module,
+                comment: ""
+            ),
             message: message,
-            buttonTitle: NSLocalizedString("Delete Project", bundle: .module, comment: "")
+            buttonTitle: NSLocalizedString(
+                project.sessions.isEmpty ? "Remove Project" : "Delete Project",
+                bundle: .module,
+                comment: ""
+            )
         ) {
-            store.trashProject(named: projectName)
+            store.trashProject(path: projectPath)
         }
     }
 
@@ -1116,8 +1150,13 @@ private struct UtilizationProgressBar: View {
 private struct ProjectMenuGroup: Identifiable {
     let id: String
     let projectName: String
+    let projectPath: String?
     let latest: Date
     let sessions: [CodexSession]
+
+    var isChatsProject: Bool {
+        projectPath == nil || projectPath?.isEmpty == true
+    }
 }
 
 @MainActor

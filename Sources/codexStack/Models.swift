@@ -143,6 +143,15 @@ struct CodexSession: Identifiable, Hashable, Sendable {
     let sizeInBytes: Int64
     let projectPath: String?
 
+    var projectID: String {
+        guard let projectPath, !projectPath.isEmpty else { return "chats" }
+        return projectPath
+    }
+
+    var isChatsProject: Bool {
+        projectPath == nil || projectPath?.isEmpty == true
+    }
+
     var projectName: String {
         guard let projectPath, !projectPath.isEmpty else { return "Chats" }
         return URL(fileURLWithPath: projectPath).lastPathComponent
@@ -150,6 +159,16 @@ struct CodexSession: Identifiable, Hashable, Sendable {
 
     var sizeLabel: String {
         ByteCountFormatter.string(fromByteCount: sizeInBytes, countStyle: .file)
+    }
+}
+
+struct CodexProject: Identifiable, Hashable, Sendable {
+    let path: String
+
+    var id: String { path }
+
+    var name: String {
+        URL(fileURLWithPath: path).lastPathComponent
     }
 }
 

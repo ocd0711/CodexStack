@@ -8,6 +8,7 @@ struct CodexSessionService {
     private let archivedRoot: URL
     private let sessionIndexURL: URL
     private let stateDatabaseURL: URL
+    private let globalStateURL: URL
     private let idRegex = try! NSRegularExpression(
         pattern: #"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$"#,
         options: [.caseInsensitive]
@@ -19,6 +20,7 @@ struct CodexSessionService {
         self.archivedRoot = codexRoot.appending(path: "archived_sessions")
         self.sessionIndexURL = codexRoot.appending(path: "session_index.jsonl")
         self.stateDatabaseURL = codexRoot.appending(path: "state_5.sqlite")
+        self.globalStateURL = codexRoot.appending(path: ".codex-global-state.json")
     }
 
     var codexRootURL: URL { codexRoot }
@@ -29,6 +31,24 @@ struct CodexSessionService {
         let active = scanSessions(in: activeRoot, archived: false, index: index, threads: threads)
         let archived = scanSessions(in: archivedRoot, archived: true, index: index, threads: threads)
         return (active + archived).sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    func loadProjects(including sessions: [CodexSession]) -> [CodexProject] {
+        var paths = Set<String>()
+
+        for path in loadSavedWorkspaceRoots() {
+            paths.insert(path)
+        }
+
+        for session in sessions {
+            if let projectPath = normalizedText(session.projectPath) {
+                paths.insert(projectPath)
+            }
+        }
+
+        return paths
+            .map(CodexProject.init(path:))
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
     func archive(_ session: CodexSession) throws {
@@ -67,6 +87,27 @@ struct CodexSessionService {
                 try fileManager.trashItem(at: session.fileURL, resultingItemURL: &trashURL)
             }
         }
+    }
+
+    func removeSavedWorkspaceRoot(_ projectPath: String) throws -> Bool {
+        guard fileManager.fileExists(atPath: globalStateURL.path),
+              let normalizedProjectPath = normalizedText(projectPath) else {
+            return false
+        }
+
+        let data = try Data(contentsOf: globalStateURL)
+        guard var json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let roots = json["electron-saved-workspace-roots"] as? [String] else {
+            return false
+        }
+
+        let standardizedTarget = standardizedPath(normalizedProjectPath)
+        let filteredRoots = roots.filter { standardizedPath($0) != standardizedTarget }
+        guard filteredRoots.count != roots.count else { return false }
+
+        json["electron-saved-workspace-roots"] = filteredRoots
+        try writeGlobalState(json)
+        return true
     }
 
     func renameSession(id: String, newTitle: String) throws {
@@ -134,21 +175,30 @@ struct CodexSessionService {
     func moveSessions(_ sessions: [CodexSession], toProjectPath projectPath: String?) throws {
         guard !sessions.isEmpty else { return }
         let normalizedProjectPath = normalizedText(projectPath)
+        let ids = sessions.map(\.id)
         var changedCodexState = false
         var changedSessionFiles = false
 
-        if fileManager.fileExists(atPath: stateDatabaseURL.path) {
+        changedCodexState = try updateProjectlessThreadState(
+            ids: ids,
+            projectPath: normalizedProjectPath
+        )
+
+        if let normalizedProjectPath,
+           fileManager.fileExists(atPath: stateDatabaseURL.path) {
             changedCodexState = try updateThreadProjectPath(
-                ids: sessions.map(\.id),
+                ids: ids,
                 projectPath: normalizedProjectPath
-            )
+            ) || changedCodexState
         }
 
-        for session in sessions {
-            changedSessionFiles = try updateSessionFileProjectPath(
-                session.fileURL,
-                projectPath: normalizedProjectPath
-            ) || changedSessionFiles
+        if normalizedProjectPath != nil {
+            for session in sessions {
+                changedSessionFiles = try updateSessionFileProjectPath(
+                    session.fileURL,
+                    projectPath: normalizedProjectPath
+                ) || changedSessionFiles
+            }
         }
 
         guard changedCodexState || changedSessionFiles else {
@@ -237,7 +287,7 @@ struct CodexSessionService {
             let title = resolvedSessionTitle(threadTitle: thread?.title, indexTitle: metadata?.threadName)
             let updatedAt = thread?.updatedAt ?? metadata?.updatedAt ?? values?.contentModificationDate ?? .distantPast
             let size = Int64(values?.fileSize ?? 0)
-            let projectPath = normalizedText(thread?.cwd) ?? fileMetadata.projectPath
+            let projectPath = thread?.isProjectless == true ? nil : (normalizedText(thread?.cwd) ?? fileMetadata.projectPath)
 
             results.append(
                 CodexSession(
@@ -255,7 +305,10 @@ struct CodexSessionService {
     }
 
     private func loadThreadLookup() -> ThreadLookup {
-        guard fileManager.fileExists(atPath: stateDatabaseURL.path) else { return .empty }
+        let projectlessThreadIDs = loadProjectlessThreadIDs()
+        guard fileManager.fileExists(atPath: stateDatabaseURL.path) else {
+            return ThreadLookup(entries: [], projectlessThreadIDs: projectlessThreadIDs)
+        }
 
         var database: OpaquePointer?
         let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX
@@ -264,7 +317,7 @@ struct CodexSessionService {
             if database != nil {
                 sqlite3_close(database)
             }
-            return .empty
+            return ThreadLookup(entries: [], projectlessThreadIDs: projectlessThreadIDs)
         }
         defer { sqlite3_close(database) }
 
@@ -272,7 +325,7 @@ struct CodexSessionService {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
               let statement else {
-            return .empty
+            return ThreadLookup(entries: [], projectlessThreadIDs: projectlessThreadIDs)
         }
         defer { sqlite3_finalize(statement) }
 
@@ -289,11 +342,12 @@ struct CodexSessionService {
                     rolloutPath: rolloutPath,
                     title: title,
                     cwd: cwd,
-                    updatedAt: updatedAt
+                    updatedAt: updatedAt,
+                    isProjectless: projectlessThreadIDs.contains(id)
                 )
             )
         }
-        return ThreadLookup(entries: entries)
+        return ThreadLookup(entries: entries, projectlessThreadIDs: projectlessThreadIDs)
     }
 
     private func updateThreadTitle(id: String, title: String) throws -> Bool {
@@ -327,7 +381,7 @@ struct CodexSessionService {
         return sqlite3_changes(database) > 0
     }
 
-    private func updateThreadProjectPath(ids: [String], projectPath: String?) throws -> Bool {
+    private func updateThreadProjectPath(ids: [String], projectPath: String) throws -> Bool {
         guard !ids.isEmpty else { return false }
         var database: OpaquePointer?
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
@@ -351,11 +405,7 @@ struct CodexSessionService {
                 throw NSError(domain: "codexStack", code: 9, userInfo: [NSLocalizedDescriptionKey: "Could not prepare project update"])
             }
 
-            if let projectPath {
-                sqlite3_bind_text(statement, 1, projectPath, -1, SQLITE_TRANSIENT)
-            } else {
-                sqlite3_bind_null(statement, 1)
-            }
+            sqlite3_bind_text(statement, 1, projectPath, -1, SQLITE_TRANSIENT)
             sqlite3_bind_text(statement, 2, id, -1, SQLITE_TRANSIENT)
 
             guard sqlite3_step(statement) == SQLITE_DONE else {
@@ -366,6 +416,47 @@ struct CodexSessionService {
             sqlite3_finalize(statement)
         }
         return changed
+    }
+
+    private func updateProjectlessThreadState(ids: [String], projectPath: String?) throws -> Bool {
+        guard !ids.isEmpty,
+              fileManager.fileExists(atPath: globalStateURL.path) else {
+            return false
+        }
+
+        let data = try Data(contentsOf: globalStateURL)
+        guard var json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return false
+        }
+
+        var changed = false
+        var projectlessIDs = json["projectless-thread-ids"] as? [String] ?? []
+        let idSet = Set(ids)
+
+        if projectPath == nil {
+            for id in ids where !projectlessIDs.contains(id) {
+                projectlessIDs.append(id)
+                changed = true
+            }
+        } else {
+            let filtered = projectlessIDs.filter { !idSet.contains($0) }
+            if filtered.count != projectlessIDs.count {
+                projectlessIDs = filtered
+                changed = true
+            }
+
+            if var hints = json["thread-workspace-root-hints"] as? [String: String] {
+                for id in ids where hints.removeValue(forKey: id) != nil {
+                    changed = true
+                }
+                json["thread-workspace-root-hints"] = hints
+            }
+        }
+
+        guard changed else { return false }
+        json["projectless-thread-ids"] = projectlessIDs
+        try writeGlobalState(json)
+        return true
     }
 
     private func updateSessionFileProjectPath(_ fileURL: URL, projectPath: String?) throws -> Bool {
@@ -478,6 +569,49 @@ struct CodexSessionService {
         ids.formUnion(scanSessionIDs(in: activeRoot))
         ids.formUnion(scanSessionIDs(in: archivedRoot))
         return ids
+    }
+
+    private func loadSavedWorkspaceRoots() -> [String] {
+        guard fileManager.fileExists(atPath: globalStateURL.path),
+              let data = try? Data(contentsOf: globalStateURL),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let roots = json["electron-saved-workspace-roots"] as? [String] else {
+            return []
+        }
+
+        var seen = Set<String>()
+        var results: [String] = []
+        for root in roots {
+            guard let normalized = normalizedText(root) else { continue }
+            let standardized = standardizedPath(normalized)
+            guard !seen.contains(standardized) else { continue }
+            seen.insert(standardized)
+            results.append(standardized)
+        }
+        return results
+    }
+
+    private func loadProjectlessThreadIDs() -> Set<String> {
+        guard fileManager.fileExists(atPath: globalStateURL.path),
+              let data = try? Data(contentsOf: globalStateURL),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let ids = json["projectless-thread-ids"] as? [String] else {
+            return []
+        }
+        return Set(ids.filter { !$0.isEmpty })
+    }
+
+    private func writeGlobalState(_ json: [String: Any]) throws {
+        let rewritten = try JSONSerialization.data(withJSONObject: json, options: [])
+        let tempURL = codexRoot.appending(path: ".codex-global-state.json.tmp")
+        try rewritten.write(to: tempURL, options: .atomic)
+
+        _ = try fileManager.replaceItemAt(
+            globalStateURL,
+            withItemAt: tempURL,
+            backupItemName: ".codex-global-state.backup-\(indexBackupSuffix()).json",
+            options: []
+        )
     }
 
     private func scanSessionIDs(in root: URL) -> Set<String> {
@@ -636,6 +770,10 @@ struct CodexSessionService {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private func standardizedPath(_ path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.path
+    }
+
     private func parseTimestamp(_ raw: Any?) -> Date? {
         guard let value = raw as? String else { return nil }
         if let date = ISO8601DateFormatter.fractional.date(from: value) {
@@ -681,15 +819,17 @@ private struct ThreadMetadata {
     let title: String?
     let cwd: String?
     let updatedAt: Date?
+    let isProjectless: Bool
 }
 
 private struct ThreadLookup {
     let byID: [String: ThreadMetadata]
     let byRolloutPath: [String: ThreadMetadata]
+    let projectlessThreadIDs: Set<String>
 
-    static let empty = ThreadLookup(entries: [])
+    static let empty = ThreadLookup(entries: [], projectlessThreadIDs: [])
 
-    init(entries: [ThreadMetadata]) {
+    init(entries: [ThreadMetadata], projectlessThreadIDs: Set<String>) {
         var byID: [String: ThreadMetadata] = [:]
         var byRolloutPath: [String: ThreadMetadata] = [:]
         for entry in entries {
@@ -700,10 +840,22 @@ private struct ThreadLookup {
         }
         self.byID = byID
         self.byRolloutPath = byRolloutPath
+        self.projectlessThreadIDs = projectlessThreadIDs
     }
 
     func metadata(for id: String, fileURL: URL) -> ThreadMetadata? {
-        byID[id] ?? byRolloutPath[Self.standardizedPath(fileURL.path)]
+        if let metadata = byID[id] ?? byRolloutPath[Self.standardizedPath(fileURL.path)] {
+            return metadata
+        }
+        guard projectlessThreadIDs.contains(id) else { return nil }
+        return ThreadMetadata(
+            id: id,
+            rolloutPath: nil,
+            title: nil,
+            cwd: nil,
+            updatedAt: nil,
+            isProjectless: true
+        )
     }
 
     private static func standardizedPath(_ path: String) -> String {

@@ -96,6 +96,8 @@
 "Back" = "返回";
 "Search title or session id" = "搜索标题或会话 ID";
 "Scope" = "范围";
+"No chats in this scope" = "当前范围没有会话";
+"Select Project Sessions" = "选择该项目会话";
 "Move to Trash" = "移到废纸篓";
 "Move..." = "移动...";
 "Move" = "移动";
@@ -106,7 +108,9 @@
 "Operation Failed" = "操作失败";
 "Move selected session files to Trash?" = "将选中会话文件移到废纸篓？";
 "Move all sessions in this project to Trash?" = "将此项目的全部会话移到废纸篓？";
+"Remove this project from Codex?" = "从 Codex 移除此项目？";
 "Move Project to Trash" = "删除项目到废纸篓";
+"Remove Project" = "移除项目";
 "Session Details" = "会话详情";
 "Title" = "标题";
 "Session ID" = "会话 ID";
