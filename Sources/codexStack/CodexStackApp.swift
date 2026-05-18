@@ -1610,6 +1610,7 @@ private struct SettingsWindowView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .ignoresSafeArea(.all, edges: .top)
         .frame(minWidth: 760, minHeight: 500)
         .background(settingsWindowBackground)
         .alert(item: $updateAlert) { alert in
@@ -1629,24 +1630,18 @@ private struct SettingsWindowView: View {
     }
 
     private var headerBar: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             Image(nsImage: codexStackLogoImage(progressMode: progressMode))
                 .resizable()
-                .frame(width: 32, height: 32)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(localized("Settings"))
-                    .font(.title3.weight(.semibold))
-                Text(localized("Configure codexStack and Codex session sources."))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+                .frame(width: 24, height: 24)
+            Text(localized("Settings"))
+                .font(.system(size: 15, weight: .semibold))
             Spacer()
         }
-        .padding(.leading, 84)
+        .padding(.leading, 80)
         .padding(.trailing, 18)
-        .padding(.top, 14)
-        .padding(.bottom, 12)
-        .background(.regularMaterial)
+        .frame(height: 52)
+        .background(Color.clear)
         .overlay(alignment: .bottom) {
             Divider()
         }
