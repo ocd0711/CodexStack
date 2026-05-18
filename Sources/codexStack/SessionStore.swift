@@ -262,21 +262,28 @@ final class SessionStore: ObservableObject {
 
     private func detectResetCelebrations(in newUsage: UsageSnapshot) {
         let defaults = UserDefaults.standard
+        let accountPrefix = newUsage.accountEmail ?? "default"
+        let sessionKey = "\(SessionStore.lastSessionResetSeenKey)_\(accountPrefix)"
+        let weeklyKey = "\(SessionStore.lastWeeklyResetSeenKey)_\(accountPrefix)"
 
         if let newReset = newUsage.sessionResetAt {
-            let lastSeen = defaults.object(forKey: SessionStore.lastSessionResetSeenKey) as? Date
-            if let lastSeen, newReset > lastSeen, celebrateSessionReset {
-                onResetCelebration?(.session)
+            let lastSeen = defaults.object(forKey: sessionKey) as? Date
+            if lastSeen == nil || newReset > lastSeen! {
+                if lastSeen != nil, celebrateSessionReset {
+                    onResetCelebration?(.session)
+                }
+                defaults.set(newReset, forKey: sessionKey)
             }
-            defaults.set(newReset, forKey: SessionStore.lastSessionResetSeenKey)
         }
 
         if let newReset = newUsage.weeklyResetAt {
-            let lastSeen = defaults.object(forKey: SessionStore.lastWeeklyResetSeenKey) as? Date
-            if let lastSeen, newReset > lastSeen, celebrateWeeklyReset {
-                onResetCelebration?(.weekly)
+            let lastSeen = defaults.object(forKey: weeklyKey) as? Date
+            if lastSeen == nil || newReset > lastSeen! {
+                if lastSeen != nil, celebrateWeeklyReset {
+                    onResetCelebration?(.weekly)
+                }
+                defaults.set(newReset, forKey: weeklyKey)
             }
-            defaults.set(newReset, forKey: SessionStore.lastWeeklyResetSeenKey)
         }
     }
 
