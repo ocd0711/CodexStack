@@ -1612,7 +1612,7 @@ private struct SettingsWindowView: View {
         }
         .ignoresSafeArea(.all, edges: .top)
         .frame(minWidth: 760, minHeight: 500)
-        .background(settingsWindowBackground)
+        .background(settingsWindowBackground.ignoresSafeArea())
         .alert(item: $updateAlert) { alert in
             Alert(
                 title: Text(alert.title),
