@@ -15,6 +15,8 @@
 		A1B2C3D4E5F6000000000106 /* UsageMetricsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000000000206 /* UsageMetricsService.swift */; };
 		A1B2C3D4E5F6000000000107 /* StatusIconRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000000000207 /* StatusIconRenderer.swift */; };
 		A1B2C3D4E5F6000000000108 /* BundleModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000000000208 /* BundleModule.swift */; };
+		A1B2C3D4E5F6000000000109 /* AccountCredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000000000209 /* AccountCredentialStore.swift */; };
+		A1B2C3D4E5F600000000010A /* ResetCelebration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600000000020A /* ResetCelebration.swift */; };
 		A1B2C3D4E5F6000000000111 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000000000211 /* Assets.xcassets */; };
 		A1B2C3D4E5F6000000000112 /* codexStack-logo.png in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000000000212 /* codexStack-logo.png */; };
 		A1B2C3D4E5F6000000000113 /* codexStack.icns in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000000000213 /* codexStack.icns */; };
@@ -31,6 +33,8 @@
 		A1B2C3D4E5F6000000000206 /* UsageMetricsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageMetricsService.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000000000207 /* StatusIconRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusIconRenderer.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000000000208 /* BundleModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BundleModule.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6000000000209 /* AccountCredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountCredentialStore.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F600000000020A /* ResetCelebration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResetCelebration.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000000000210 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000000000211 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000000000212 /* codexStack-logo.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = Assets/codexStack-logo.png; sourceTree = "<group>"; };
@@ -94,6 +98,8 @@
 				A1B2C3D4E5F6000000000206 /* UsageMetricsService.swift */,
 				A1B2C3D4E5F6000000000207 /* StatusIconRenderer.swift */,
 				A1B2C3D4E5F6000000000208 /* BundleModule.swift */,
+				A1B2C3D4E5F6000000000209 /* AccountCredentialStore.swift */,
+				A1B2C3D4E5F600000000020A /* ResetCelebration.swift */,
 				A1B2C3D4E5F6000000000406 /* Resources */,
 			);
 			path = codexStack;
@@ -191,6 +197,8 @@
 				A1B2C3D4E5F6000000000106 /* UsageMetricsService.swift in Sources */,
 				A1B2C3D4E5F6000000000107 /* StatusIconRenderer.swift in Sources */,
 				A1B2C3D4E5F6000000000108 /* BundleModule.swift in Sources */,
+				A1B2C3D4E5F6000000000109 /* AccountCredentialStore.swift in Sources */,
+				A1B2C3D4E5F600000000010A /* ResetCelebration.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
