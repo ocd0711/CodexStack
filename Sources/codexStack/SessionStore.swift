@@ -23,6 +23,15 @@ final class SessionStore: ObservableObject {
     @Published var refreshInterval: RefreshInterval
     @Published private(set) var codexRootPath: String
     @Published private(set) var usage: UsageSnapshot = .empty
+    @Published private(set) var preferredAccountID: String?
+    @Published var celebrateSessionReset: Bool
+    @Published var celebrateWeeklyReset: Bool
+    static let preferredAccountIDDefaultsKey = "preferredAccountID"
+    static let celebrateSessionResetDefaultsKey = "celebrateSessionReset"
+    static let celebrateWeeklyResetDefaultsKey = "celebrateWeeklyReset"
+    private static let lastSessionResetSeenKey = "lastSessionResetSeen"
+    private static let lastWeeklyResetSeenKey = "lastWeeklyResetSeen"
+    var onResetCelebration: ((ResetCelebrationKind) -> Void)?
     @Published private(set) var isRefreshing = false
     @Published private(set) var isMutating = false
     @Published private(set) var mutationMessage: String?
@@ -34,11 +43,17 @@ final class SessionStore: ObservableObject {
     init(
         codexRootPath: String = SessionStore.defaultCodexRootPath(),
         utilizationProgressMode: UtilizationProgressMode = .remaining,
-        refreshInterval: RefreshInterval = .off
+        refreshInterval: RefreshInterval = .off,
+        preferredAccountID: String? = nil,
+        celebrateSessionReset: Bool = true,
+        celebrateWeeklyReset: Bool = true
     ) {
         self.codexRootPath = codexRootPath
         self.utilizationProgressMode = utilizationProgressMode
         self.refreshInterval = refreshInterval
+        self.preferredAccountID = preferredAccountID
+        self.celebrateSessionReset = celebrateSessionReset
+        self.celebrateWeeklyReset = celebrateWeeklyReset
         refresh()
         scheduleAutoRefresh()
     }
@@ -125,10 +140,11 @@ final class SessionStore: ObservableObject {
         guard refreshTask == nil else { return }
         isRefreshing = true
         let rootPath = expandedPath(codexRootPath)
+        let preferredID = preferredAccountID
 
         refreshTask = Task {
             let result = await Task.detached(priority: .userInitiated) {
-                Self.computeRefreshResult(codexRootPath: rootPath)
+                Self.computeRefreshResult(codexRootPath: rootPath, preferredAccountID: preferredID)
             }.value
 
             await MainActor.run {
@@ -138,6 +154,7 @@ final class SessionStore: ObservableObject {
                 case let .success(snapshot):
                     sessions = snapshot.sessions
                     projects = snapshot.projects
+                    detectResetCelebrations(in: snapshot.usage)
                     usage = snapshot.usage
                     selectedIDs = selectedIDs.intersection(Set(sessions.map(\.id)))
                     if !projectOptions.contains(selectedProject) {
@@ -231,6 +248,72 @@ final class SessionStore: ObservableObject {
         scheduleAutoRefresh()
     }
 
+    func setCelebrateSessionReset(_ newValue: Bool) {
+        guard celebrateSessionReset != newValue else { return }
+        celebrateSessionReset = newValue
+        UserDefaults.standard.set(newValue, forKey: SessionStore.celebrateSessionResetDefaultsKey)
+    }
+
+    func setCelebrateWeeklyReset(_ newValue: Bool) {
+        guard celebrateWeeklyReset != newValue else { return }
+        celebrateWeeklyReset = newValue
+        UserDefaults.standard.set(newValue, forKey: SessionStore.celebrateWeeklyResetDefaultsKey)
+    }
+
+    private func detectResetCelebrations(in newUsage: UsageSnapshot) {
+        let defaults = UserDefaults.standard
+
+        if let newReset = newUsage.sessionResetAt {
+            let lastSeen = defaults.object(forKey: SessionStore.lastSessionResetSeenKey) as? Date
+            if let lastSeen, newReset > lastSeen, celebrateSessionReset {
+                onResetCelebration?(.session)
+            }
+            defaults.set(newReset, forKey: SessionStore.lastSessionResetSeenKey)
+        }
+
+        if let newReset = newUsage.weeklyResetAt {
+            let lastSeen = defaults.object(forKey: SessionStore.lastWeeklyResetSeenKey) as? Date
+            if let lastSeen, newReset > lastSeen, celebrateWeeklyReset {
+                onResetCelebration?(.weekly)
+            }
+            defaults.set(newReset, forKey: SessionStore.lastWeeklyResetSeenKey)
+        }
+    }
+
+    func setPreferredAccountID(_ newID: String?) {
+        guard preferredAccountID != newID else { return }
+        preferredAccountID = newID
+        UserDefaults.standard.set(newID, forKey: SessionStore.preferredAccountIDDefaultsKey)
+        if let matching = usage.accounts.first(where: { $0.id == newID }) ?? usage.accounts.first {
+            usage = UsageSnapshot(
+                updatedAt: matching.updatedAt ?? usage.updatedAt,
+                accountEmail: matching.email,
+                accountName: matching.name,
+                planType: matching.planType,
+                source: matching.source,
+                sessionUsedRatio: matching.sessionUsedRatio,
+                weeklyUsedRatio: matching.weeklyUsedRatio,
+                sessionResetAt: matching.sessionResetAt,
+                weeklyResetAt: matching.weeklyResetAt,
+                todayTokens: usage.todayTokens,
+                last30DaysTokens: usage.last30DaysTokens,
+                todayCostUSD: usage.todayCostUSD,
+                last30DaysCostUSD: usage.last30DaysCostUSD,
+                dailyCostSeries: usage.dailyCostSeries,
+                accounts: reorderAccounts(usage.accounts, preferring: matching.id)
+            )
+        }
+        refresh()
+    }
+
+    private func reorderAccounts(
+        _ accounts: [UsageAccountSnapshot],
+        preferring id: String
+    ) -> [UsageAccountSnapshot] {
+        guard let match = accounts.first(where: { $0.id == id }) else { return accounts }
+        return [match] + accounts.filter { $0.id != id }
+    }
+
     func clearError() {
         lastError = nil
     }
@@ -281,6 +364,7 @@ final class SessionStore: ObservableObject {
     ) {
         guard mutationTask == nil else { return }
         let rootPath = expandedPath(codexRootPath)
+        let preferredID = preferredAccountID
 
         isMutating = true
         mutationMessage = message
@@ -291,7 +375,7 @@ final class SessionStore: ObservableObject {
                 Self.performMutation(codexRootPath: rootPath, mutation: mutation)
             }.value
             let refreshResult = await Task.detached(priority: .userInitiated) {
-                Self.computeRefreshResult(codexRootPath: rootPath)
+                Self.computeRefreshResult(codexRootPath: rootPath, preferredAccountID: preferredID)
             }.value
 
             await MainActor.run {
@@ -325,13 +409,19 @@ final class SessionStore: ObservableObject {
         }
     }
 
-    nonisolated private static func computeRefreshResult(codexRootPath: String) -> RefreshComputationResult {
+    nonisolated private static func computeRefreshResult(
+        codexRootPath: String,
+        preferredAccountID: String? = nil
+    ) -> RefreshComputationResult {
         do {
             let service = CodexSessionService(codexRoot: URL(fileURLWithPath: codexRootPath, isDirectory: true))
             try service.reconcileSessionIndex()
             let sessions = try service.loadSessions()
             let projects = service.loadProjects(including: sessions)
-            let usage = UsageMetricsService().loadUsageSnapshot(codexRoot: service.codexRootURL)
+            let usage = UsageMetricsService().loadUsageSnapshot(
+                codexRoot: service.codexRootURL,
+                preferredAccountID: preferredAccountID
+            )
             return .success(
                 RefreshSnapshot(
                     sessions: sessions,

@@ -29,6 +29,7 @@ struct UsageSnapshot: Sendable {
     var todayCostUSD: Double
     var last30DaysCostUSD: Double
     var dailyCostSeries: [UsageDailyCost]
+    var accounts: [UsageAccountSnapshot]
 
     static let empty = UsageSnapshot(
         updatedAt: nil,
@@ -44,8 +45,35 @@ struct UsageSnapshot: Sendable {
         last30DaysTokens: 0,
         todayCostUSD: 0,
         last30DaysCostUSD: 0,
-        dailyCostSeries: []
+        dailyCostSeries: [],
+        accounts: []
     )
+}
+
+struct UsageAccountSnapshot: Identifiable, Hashable, Sendable {
+    let id: String
+    let accountID: String?
+    let email: String?
+    let name: String?
+    let note: String?
+    let planType: String?
+    let source: UsageSource
+    let sessionUsedRatio: Double?
+    let weeklyUsedRatio: Double?
+    let sessionResetAt: Date?
+    let weeklyResetAt: Date?
+    let updatedAt: Date?
+    let expiresAt: Date?
+    let isCurrentCodexAccount: Bool
+    let isCredentialExpired: Bool
+
+    var displayName: String {
+        if let note, !note.isEmpty { return note }
+        if let email, !email.isEmpty { return email }
+        if let name, !name.isEmpty { return name }
+        if let accountID, !accountID.isEmpty { return accountID }
+        return "Account"
+    }
 }
 
 struct UsageDailyCost: Identifiable, Sendable {

@@ -23,13 +23,21 @@ struct CodexStackApp: App {
         let savedRefreshRaw = UserDefaults.standard.object(forKey: Self.refreshIntervalDefaultsKey) as? Int
         let savedRefreshInterval = RefreshInterval(rawValue: savedRefreshRaw ?? 0) ?? .off
         let launchAtLoginEnabled = LaunchAtLoginController.isEnabled
-        _store = StateObject(
-            wrappedValue: SessionStore(
-                codexRootPath: saved,
-                utilizationProgressMode: savedMode,
-                refreshInterval: savedRefreshInterval
-            )
+        let preferredAccountID = UserDefaults.standard.string(forKey: SessionStore.preferredAccountIDDefaultsKey)
+        let celebrateSession = (UserDefaults.standard.object(forKey: SessionStore.celebrateSessionResetDefaultsKey) as? Bool) ?? true
+        let celebrateWeekly = (UserDefaults.standard.object(forKey: SessionStore.celebrateWeeklyResetDefaultsKey) as? Bool) ?? true
+        let store = SessionStore(
+            codexRootPath: saved,
+            utilizationProgressMode: savedMode,
+            refreshInterval: savedRefreshInterval,
+            preferredAccountID: preferredAccountID,
+            celebrateSessionReset: celebrateSession,
+            celebrateWeeklyReset: celebrateWeekly
         )
+        store.onResetCelebration = { kind in
+            ResetCelebrationController.shared.present(kind: kind)
+        }
+        _store = StateObject(wrappedValue: store)
         _showMenuBarPercentage = State(initialValue: showPercentage)
         _launchAtLogin = State(initialValue: launchAtLoginEnabled)
     }
@@ -43,8 +51,10 @@ struct CodexStackApp: App {
                         currentProgressMode: store.utilizationProgressMode,
                         showMenuBarPercentage: showMenuBarPercentage,
                         refreshInterval: store.refreshInterval,
-                        launchAtLogin: launchAtLogin
-                    ) { newPath, progressMode, showPercentage, refreshInterval, launchAtLoginEnabled in
+                        launchAtLogin: launchAtLogin,
+                        celebrateSessionReset: store.celebrateSessionReset,
+                        celebrateWeeklyReset: store.celebrateWeeklyReset,
+                        onSave: { newPath, progressMode, showPercentage, refreshInterval, launchAtLoginEnabled in
                         let expanded = NSString(string: newPath).expandingTildeInPath
                         UserDefaults.standard.set(expanded, forKey: Self.codexRootPathDefaultsKey)
                         UserDefaults.standard.set(
@@ -61,7 +71,15 @@ struct CodexStackApp: App {
                         store.updateRefreshInterval(refreshInterval)
                         showMenuBarPercentage = showPercentage
                         launchAtLogin = launchAtLoginEnabled
-                    }
+                        },
+                        onCelebrationChanged: { sessionOn, weeklyOn in
+                            store.setCelebrateSessionReset(sessionOn)
+                            store.setCelebrateWeeklyReset(weeklyOn)
+                        },
+                        onAccountsChanged: {
+                            store.refresh()
+                        }
+                    )
                 }
             )
             .environmentObject(store)
@@ -174,9 +192,7 @@ private struct MenuBarPanel: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Codex")
                     .font(.title3.weight(.semibold))
-                Text(accountLabel)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                accountSwitcher
                 if let updatedAt = store.usage.updatedAt {
                     Text("\(store.usage.source.label) · Updated \(updatedAt.formatted(.relative(presentation: .named)))")
                         .font(.caption)
@@ -201,6 +217,58 @@ private struct MenuBarPanel: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private var accountSwitcher: some View {
+        let accounts = store.usage.accounts
+        if accounts.count > 1 {
+            Menu {
+                ForEach(accounts) { account in
+                    Button {
+                        store.setPreferredAccountID(account.id)
+                    } label: {
+                        if account.id == activeAccountID {
+                            Label(accountMenuLabel(for: account), systemImage: "checkmark")
+                        } else {
+                            Text(accountMenuLabel(for: account))
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(accountLabel)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Image(systemName: "chevron.down")
+                        .font(.caption2)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+        } else {
+            Text(accountLabel)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var activeAccountID: String? {
+        store.preferredAccountID ?? store.usage.accounts.first?.id
+    }
+
+    private func accountMenuLabel(for account: UsageAccountSnapshot) -> String {
+        var parts: [String] = [accountDisplayLabel(for: account) ?? account.displayName]
+        if let plan = account.planType, !plan.isEmpty {
+            parts.append(plan.uppercased())
+        }
+        if account.isCredentialExpired {
+            parts.append("Expired")
+        }
+        return parts.joined(separator: " · ")
     }
 
     private var costSummaryCard: some View {
@@ -616,13 +684,33 @@ private struct MenuBarPanel: View {
     }
 
     private var accountLabel: String {
-        if let name = store.usage.accountName, !name.isEmpty {
-            return name
+        if let active = store.usage.accounts.first,
+           let label = accountDisplayLabel(for: active) {
+            return label
         }
         if let email = store.usage.accountEmail, !email.isEmpty {
             return email
         }
+        if let name = store.usage.accountName, !name.isEmpty {
+            return name
+        }
         return "Account unavailable"
+    }
+
+    private func accountDisplayLabel(for account: UsageAccountSnapshot) -> String? {
+        let email = account.email?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nickname = account.note?.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch (email?.isEmpty == false ? email : nil, nickname?.isEmpty == false ? nickname : nil) {
+        case let (email?, nickname?):
+            return "\(email) (\(nickname))"
+        case let (email?, nil):
+            return email
+        case let (nil, nickname?):
+            return nickname
+        default:
+            if let id = account.accountID, !id.isEmpty { return id }
+            return nil
+        }
     }
 
     private var planLabel: String {
@@ -907,27 +995,105 @@ private struct UtilizationSection: View {
     let usage: UsageSnapshot
     let progressMode: UtilizationProgressMode
 
+    private var accountSections: [UsageAccountSnapshot] {
+        if !usage.accounts.isEmpty { return usage.accounts }
+        let fallback = UsageAccountSnapshot(
+            id: usage.accountEmail ?? "primary",
+            accountID: nil,
+            email: usage.accountEmail,
+            name: usage.accountName,
+            note: nil,
+            planType: usage.planType,
+            source: usage.source,
+            sessionUsedRatio: usage.sessionUsedRatio,
+            weeklyUsedRatio: usage.weeklyUsedRatio,
+            sessionResetAt: usage.sessionResetAt,
+            weeklyResetAt: usage.weeklyResetAt,
+            updatedAt: usage.updatedAt,
+            expiresAt: nil,
+            isCurrentCodexAccount: true,
+            isCredentialExpired: false
+        )
+        return [fallback]
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Subscription Utilization")
                 .font(.headline)
 
-            utilizationLane(
-                title: "Session",
-                usedRatio: usage.sessionUsedRatio,
-                resetAt: usage.sessionResetAt,
-                defaultWindowSeconds: 5 * 60 * 60
-            )
-            utilizationLane(
-                title: "Weekly",
-                usedRatio: usage.weeklyUsedRatio,
-                resetAt: usage.weeklyResetAt,
-                defaultWindowSeconds: 7 * 24 * 60 * 60
-            )
+            let sections = accountSections
+            ForEach(Array(sections.enumerated()), id: \.element.id) { index, account in
+                if index > 0 {
+                    Divider().opacity(0.5)
+                }
+                if sections.count > 1 {
+                    accountHeader(account)
+                }
+                utilizationLane(
+                    title: "Session",
+                    usedRatio: account.sessionUsedRatio,
+                    resetAt: account.sessionResetAt,
+                    defaultWindowSeconds: 5 * 60 * 60
+                )
+                utilizationLane(
+                    title: "Weekly",
+                    usedRatio: account.weeklyUsedRatio,
+                    resetAt: account.weeklyResetAt,
+                    defaultWindowSeconds: 7 * 24 * 60 * 60
+                )
+            }
         }
         .padding(10)
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    @ViewBuilder
+    private func accountHeader(_ account: UsageAccountSnapshot) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(accountHeaderLabel(for: account))
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if account.isCurrentCodexAccount {
+                Text("Active")
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Color.accentColor.opacity(0.18), in: Capsule())
+                    .foregroundStyle(Color.accentColor)
+            }
+            if account.isCredentialExpired {
+                Text("Expired")
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Color.red.opacity(0.18), in: Capsule())
+                    .foregroundStyle(Color.red)
+            }
+            Spacer()
+            if let plan = account.planType, !plan.isEmpty {
+                Text(plan.uppercased())
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func accountHeaderLabel(for account: UsageAccountSnapshot) -> String {
+        let email = account.email?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nickname = account.note?.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch (email?.isEmpty == false ? email : nil, nickname?.isEmpty == false ? nickname : nil) {
+        case let (email?, nickname?):
+            return "\(email) (\(nickname))"
+        case let (email?, nil):
+            return email
+        case let (nil, nickname?):
+            return nickname
+        default:
+            return account.displayName
+        }
     }
 
     @ViewBuilder
@@ -1193,6 +1359,9 @@ final class ManagerWindowController: NSWindowController, NSWindowDelegate {
             self.window = window
         }
 
+        if let window {
+            WindowPositioner.centerOnActiveScreen(window)
+        }
         NSApplication.shared.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
     }
@@ -1223,7 +1392,11 @@ final class SettingsWindowController: NSWindowController {
         showMenuBarPercentage: Bool,
         refreshInterval: RefreshInterval,
         launchAtLogin: Bool,
-        onSave: @escaping (String, UtilizationProgressMode, Bool, RefreshInterval, Bool) -> Void
+        celebrateSessionReset: Bool,
+        celebrateWeeklyReset: Bool,
+        onSave: @escaping (String, UtilizationProgressMode, Bool, RefreshInterval, Bool) -> Void,
+        onCelebrationChanged: @escaping (Bool, Bool) -> Void = { _, _ in },
+        onAccountsChanged: @escaping () -> Void = {}
     ) {
         DispatchQueue.main.async { [weak self] in
             self?.dismissTransientMenuWindows()
@@ -1234,7 +1407,11 @@ final class SettingsWindowController: NSWindowController {
                     showMenuBarPercentage: showMenuBarPercentage,
                     refreshInterval: refreshInterval,
                     launchAtLogin: launchAtLogin,
-                    onSave: onSave
+                    celebrateSessionReset: celebrateSessionReset,
+                    celebrateWeeklyReset: celebrateWeeklyReset,
+                    onSave: onSave,
+                    onCelebrationChanged: onCelebrationChanged,
+                    onAccountsChanged: onAccountsChanged
                 )
             }
         }
@@ -1255,7 +1432,11 @@ final class SettingsWindowController: NSWindowController {
         showMenuBarPercentage: Bool,
         refreshInterval: RefreshInterval,
         launchAtLogin: Bool,
-        onSave: @escaping (String, UtilizationProgressMode, Bool, RefreshInterval, Bool) -> Void
+        celebrateSessionReset: Bool,
+        celebrateWeeklyReset: Bool,
+        onSave: @escaping (String, UtilizationProgressMode, Bool, RefreshInterval, Bool) -> Void,
+        onCelebrationChanged: @escaping (Bool, Bool) -> Void,
+        onAccountsChanged: @escaping () -> Void
     ) {
         let settingsView = SettingsWindowView(
             currentPath: currentPath,
@@ -1263,7 +1444,11 @@ final class SettingsWindowController: NSWindowController {
             showMenuBarPercentage: showMenuBarPercentage,
             refreshInterval: refreshInterval,
             launchAtLogin: launchAtLogin,
-            onSave: onSave
+            celebrateSessionReset: celebrateSessionReset,
+            celebrateWeeklyReset: celebrateWeeklyReset,
+            onSave: onSave,
+            onCelebrationChanged: onCelebrationChanged,
+            onAccountsChanged: onAccountsChanged
         )
         let hostingController: NSHostingController<SettingsWindowView>
         if let existing = settingsHostingController {
@@ -1282,13 +1467,12 @@ final class SettingsWindowController: NSWindowController {
             window.level = .normal
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
-            window.isMovableByWindowBackground = true
+            window.isMovableByWindowBackground = false
             window.toolbarStyle = .unifiedCompact
             window.backgroundColor = .clear
             window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
             window.setContentSize(contentSize)
             window.minSize = NSSize(width: 760, height: 500)
-            window.center()
             self.window = window
         } else {
             window?.contentViewController = hostingController
@@ -1296,6 +1480,9 @@ final class SettingsWindowController: NSWindowController {
 
         window?.setContentSize(contentSize)
         window?.minSize = NSSize(width: 760, height: 500)
+        if let window {
+            WindowPositioner.centerOnActiveScreen(window)
+        }
         NSApplication.shared.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
     }
@@ -1303,6 +1490,7 @@ final class SettingsWindowController: NSWindowController {
 
 private enum SettingsPane: String, CaseIterable, Identifiable {
     case general
+    case accounts
     case about
 
     var id: String { rawValue }
@@ -1311,6 +1499,8 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         switch self {
         case .general:
             return "General"
+        case .accounts:
+            return "Accounts"
         case .about:
             return "About"
         }
@@ -1320,6 +1510,8 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         switch self {
         case .general:
             return "gearshape"
+        case .accounts:
+            return "person.crop.circle.badge.plus"
         case .about:
             return "info.circle"
         }
@@ -1335,7 +1527,15 @@ private struct SettingsWindowView: View {
     @State private var launchAtLogin: Bool
     @State private var updateAlert: UpdateAlert?
     @State private var isCheckingUpdates = false
+    @State private var importedAccounts: [ImportedCodexAccountSummary] = AccountCredentialStore.loadSummaries()
+    @State private var accountAlert: UpdateAlert?
+    @State private var celebrateSessionReset: Bool
+    @State private var celebrateWeeklyReset: Bool
+    @AppStorage("accountsSortOption") private var accountsSortRaw: String = AccountsSortOption.importedNewest.rawValue
+    @AppStorage("accountsManualOrder") private var accountsManualOrderRaw: String = ""
     let onSave: (String, UtilizationProgressMode, Bool, RefreshInterval, Bool) -> Void
+    let onCelebrationChanged: (Bool, Bool) -> Void
+    let onAccountsChanged: () -> Void
 
     init(
         currentPath: String,
@@ -1343,14 +1543,22 @@ private struct SettingsWindowView: View {
         showMenuBarPercentage: Bool,
         refreshInterval: RefreshInterval,
         launchAtLogin: Bool,
-        onSave: @escaping (String, UtilizationProgressMode, Bool, RefreshInterval, Bool) -> Void
+        celebrateSessionReset: Bool = true,
+        celebrateWeeklyReset: Bool = true,
+        onSave: @escaping (String, UtilizationProgressMode, Bool, RefreshInterval, Bool) -> Void,
+        onCelebrationChanged: @escaping (Bool, Bool) -> Void = { _, _ in },
+        onAccountsChanged: @escaping () -> Void = {}
     ) {
         _currentPath = State(initialValue: currentPath)
         _progressMode = State(initialValue: currentProgressMode)
         _showMenuBarPercentage = State(initialValue: showMenuBarPercentage)
         _refreshInterval = State(initialValue: refreshInterval)
         _launchAtLogin = State(initialValue: launchAtLogin)
+        _celebrateSessionReset = State(initialValue: celebrateSessionReset)
+        _celebrateWeeklyReset = State(initialValue: celebrateWeeklyReset)
         self.onSave = onSave
+        self.onCelebrationChanged = onCelebrationChanged
+        self.onAccountsChanged = onAccountsChanged
     }
 
     var body: some View {
@@ -1368,6 +1576,13 @@ private struct SettingsWindowView: View {
         .frame(minWidth: 760, minHeight: 500)
         .background(settingsWindowBackground)
         .alert(item: $updateAlert) { alert in
+            Alert(
+                title: Text(alert.title),
+                message: Text(alert.message),
+                dismissButton: .default(Text("OK"))
+            )
+        }
+        .alert(item: $accountAlert) { alert in
             Alert(
                 title: Text(alert.title),
                 message: Text(alert.message),
@@ -1451,6 +1666,8 @@ private struct SettingsWindowView: View {
                 switch selectedPane {
                 case .general:
                     generalPane
+                case .accounts:
+                    accountsPane
                 case .about:
                     aboutPane
                 }
@@ -1516,6 +1733,103 @@ private struct SettingsWindowView: View {
                     .onChange(of: refreshInterval) { _ in applyNonPathSettings() }
                 }
             }
+
+            sectionTitle("Celebrations")
+            settingsCard {
+                SettingsLine(
+                    title: localized("5h Window Reset"),
+                    subtitle: localized("Play a full-screen confetti animation when the session window resets.")
+                ) {
+                    SettingsSwitch(isOn: $celebrateSessionReset) {
+                        onCelebrationChanged(celebrateSessionReset, celebrateWeeklyReset)
+                    }
+                }
+                SettingsDivider()
+                SettingsLine(
+                    title: localized("Weekly Reset"),
+                    subtitle: localized("Play a full-screen confetti animation when the weekly quota resets.")
+                ) {
+                    SettingsSwitch(isOn: $celebrateWeeklyReset) {
+                        onCelebrationChanged(celebrateSessionReset, celebrateWeeklyReset)
+                    }
+                }
+                SettingsDivider()
+                SettingsLine(
+                    title: localized("Preview"),
+                    subtitle: localized("Test the animation on the active screen.")
+                ) {
+                    HStack(spacing: 8) {
+                        Button(localized("5h")) {
+                            ResetCelebrationController.shared.present(kind: .session)
+                        }
+                        Button(localized("Weekly")) {
+                            ResetCelebrationController.shared.present(kind: .weekly)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var accountsPane: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            sectionTitle("Imported Accounts")
+            settingsCard {
+                SettingsLine(
+                    title: localized("Add Account"),
+                    subtitle: localized("Import a Codex auth.json or cliproxyapi OAuth JSON. Duplicates are replaced by the most recently imported credential.")
+                ) {
+                    Button(localized("Import JSON..."), action: importAccountFile)
+                }
+                if !importedAccounts.isEmpty {
+                    SettingsDivider()
+                    SettingsLine(
+                        title: localized("Sort"),
+                        subtitle: localized("Choose how imported accounts are ordered in this list.")
+                    ) {
+                        Picker("", selection: accountsSortBinding) {
+                            ForEach(AccountsSortOption.allCases) { option in
+                                Text(localized(option.label)).tag(option)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 200)
+                    }
+                    SettingsDivider()
+                    VStack(spacing: 0) {
+                        let rows = sortedImportedAccounts
+                        let isManual = accountsSortOption == .manual
+                        ForEach(Array(rows.enumerated()), id: \.element.id) { index, account in
+                            if index > 0 {
+                                ZStack {
+                                    Divider()
+                                        .padding(.horizontal, 16)
+                                    if isManual {
+                                        AccountInsertionLine { droppedID in
+                                            moveAccount(draggedID: droppedID, before: account.id)
+                                        }
+                                    }
+                                }
+                            } else if isManual {
+                                AccountInsertionLine { droppedID in
+                                    moveAccount(draggedID: droppedID, before: account.id)
+                                }
+                            }
+                            accountRow(account, isManual: isManual)
+                        }
+                        if isManual, !rows.isEmpty {
+                            AccountInsertionLine(minHeight: 12) { droppedID in
+                                moveAccount(draggedID: droppedID, before: nil)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Text(localized("Imported credentials are stored locally and used only to query ChatGPT usage windows."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
         }
     }
 
@@ -1609,6 +1923,172 @@ private struct SettingsWindowView: View {
 
     private func savePath() {
         onSave(currentPath, progressMode, showMenuBarPercentage, refreshInterval, launchAtLogin)
+    }
+
+    @ViewBuilder
+    private func accountRow(_ account: ImportedCodexAccountSummary, isManual: Bool) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            if isManual {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18)
+                    .padding(.top, 2)
+                    .help(localized("Drag to reorder"))
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(account.displayName)
+                    .font(.system(size: 13, weight: .medium))
+                if let email = account.email, !email.isEmpty, email != account.displayName {
+                    Text(email)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text(accountStatusLine(for: account))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button(localized("Remove"), role: .destructive) {
+                removeAccount(id: account.id)
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
+        .modifier(AccountDragModifier(enabled: isManual, accountID: account.id))
+    }
+
+    private var accountsSortOption: AccountsSortOption {
+        AccountsSortOption(rawValue: accountsSortRaw) ?? .importedNewest
+    }
+
+    private var accountsSortBinding: Binding<AccountsSortOption> {
+        Binding(
+            get: { accountsSortOption },
+            set: { newValue in
+                if newValue == .manual && manualOrderIDs.isEmpty {
+                    persistManualOrder(currentSortedIDs())
+                }
+                accountsSortRaw = newValue.rawValue
+            }
+        )
+    }
+
+    private var manualOrderIDs: [String] {
+        accountsManualOrderRaw
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map(String.init)
+    }
+
+    private func persistManualOrder(_ ids: [String]) {
+        accountsManualOrderRaw = ids.joined(separator: "\n")
+    }
+
+    private func currentSortedIDs() -> [String] {
+        sortedImportedAccounts.map(\.id)
+    }
+
+    private var sortedImportedAccounts: [ImportedCodexAccountSummary] {
+        accountsSortOption.sort(importedAccounts, manualOrder: manualOrderIDs)
+    }
+
+    private func moveAccount(draggedID: String, before targetID: String?) {
+        guard draggedID != targetID else { return }
+        var order = sortedImportedAccounts.map(\.id)
+        guard let fromIdx = order.firstIndex(of: draggedID) else { return }
+        let item = order.remove(at: fromIdx)
+        if let targetID, let toIdx = order.firstIndex(of: targetID) {
+            order.insert(item, at: toIdx)
+        } else {
+            order.append(item)
+        }
+        persistManualOrder(order)
+        if accountsSortOption != .manual {
+            accountsSortRaw = AccountsSortOption.manual.rawValue
+        }
+    }
+
+    private func appendNewAccountsToManualOrder() {
+        let existing = Set(manualOrderIDs)
+        let knownIDs = Set(importedAccounts.map(\.id))
+        var order = manualOrderIDs.filter(knownIDs.contains)
+        for account in importedAccounts where !existing.contains(account.id) {
+            order.append(account.id)
+        }
+        persistManualOrder(order)
+    }
+
+    private func importAccountFile() {
+        let panel = NSOpenPanel()
+        panel.prompt = localized("Import")
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = []
+        panel.allowsOtherFileTypes = true
+        guard panel.runModal() == .OK else { return }
+
+        var failures: [String] = []
+        for url in panel.urls {
+            do {
+                _ = try AccountCredentialStore.importAccount(from: url)
+            } catch {
+                failures.append("\(url.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+        importedAccounts = AccountCredentialStore.loadSummaries()
+        appendNewAccountsToManualOrder()
+        onAccountsChanged()
+        if !failures.isEmpty {
+            accountAlert = UpdateAlert(
+                title: localized("Some accounts could not be imported"),
+                message: failures.joined(separator: "\n")
+            )
+        }
+    }
+
+    private func removeAccount(id: String) {
+        do {
+            try AccountCredentialStore.removeAccount(id: id)
+            importedAccounts = AccountCredentialStore.loadSummaries()
+            persistManualOrder(manualOrderIDs.filter { $0 != id })
+            onAccountsChanged()
+        } catch {
+            accountAlert = UpdateAlert(
+                title: localized("Unable to Remove Account"),
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    private func accountStatusLine(for account: ImportedCodexAccountSummary) -> String {
+        var parts: [String] = []
+        if let plan = account.type, !plan.isEmpty {
+            parts.append(plan.uppercased())
+        }
+        if let expiresAt = account.expiresAt {
+            if expiresAt <= Date() {
+                parts.append(localized("Expired"))
+            } else {
+                let formatter = DateFormatter()
+                formatter.dateStyle = .medium
+                formatter.timeStyle = .short
+                parts.append(String.localizedStringWithFormat(
+                    NSLocalizedString("Expires %@", bundle: .module, comment: ""),
+                    formatter.string(from: expiresAt)
+                ))
+            }
+        }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        parts.append(String.localizedStringWithFormat(
+            NSLocalizedString("Imported %@", bundle: .module, comment: ""),
+            formatter.string(from: account.importedAt)
+        ))
+        return parts.joined(separator: " · ")
     }
 
     private func applyNonPathSettings() {
@@ -1783,6 +2263,126 @@ private struct UpdateAlert: Identifiable {
     let id = UUID()
     let title: String
     let message: String
+}
+
+private struct AccountDragModifier: ViewModifier {
+    let enabled: Bool
+    let accountID: String
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.draggable(accountID)
+        } else {
+            content
+        }
+    }
+}
+
+private struct AccountInsertionLine: View {
+    var minHeight: CGFloat = 6
+    let onDrop: (String) -> Void
+    @State private var isTargeted = false
+
+    var body: some View {
+        ZStack {
+            Color.clear
+            if isTargeted {
+                Capsule()
+                    .fill(Color.accentColor)
+                    .frame(height: 3)
+                    .padding(.horizontal, 14)
+                    .transition(.opacity)
+            }
+        }
+        .frame(height: minHeight)
+        .contentShape(Rectangle())
+        .dropDestination(for: String.self) { items, _ in
+            guard let droppedID = items.first else { return false }
+            onDrop(droppedID)
+            return true
+        } isTargeted: { active in
+            withAnimation(.easeInOut(duration: 0.08)) { isTargeted = active }
+        }
+    }
+}
+
+private enum AccountsSortOption: String, CaseIterable, Identifiable {
+    case manual
+    case importedNewest
+    case importedOldest
+    case nameAscending
+    case expiresSoonest
+    case expiresLatest
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .manual: return "Manual"
+        case .importedNewest: return "Imported · Newest"
+        case .importedOldest: return "Imported · Oldest"
+        case .nameAscending: return "Name (A → Z)"
+        case .expiresSoonest: return "Expires · Soonest"
+        case .expiresLatest: return "Expires · Latest"
+        }
+    }
+
+    func sort(
+        _ accounts: [ImportedCodexAccountSummary],
+        manualOrder: [String] = []
+    ) -> [ImportedCodexAccountSummary] {
+        switch self {
+        case .manual:
+            let position = Dictionary(uniqueKeysWithValues: manualOrder.enumerated().map { ($1, $0) })
+            return accounts.sorted { lhs, rhs in
+                let lhsIdx = position[lhs.id] ?? Int.max
+                let rhsIdx = position[rhs.id] ?? Int.max
+                if lhsIdx != rhsIdx { return lhsIdx < rhsIdx }
+                return (lhs.lastRefreshAt ?? lhs.importedAt) > (rhs.lastRefreshAt ?? rhs.importedAt)
+            }
+        case .importedNewest:
+            return accounts.sorted { lhs, rhs in
+                (lhs.lastRefreshAt ?? lhs.importedAt) > (rhs.lastRefreshAt ?? rhs.importedAt)
+            }
+        case .importedOldest:
+            return accounts.sorted { lhs, rhs in
+                (lhs.lastRefreshAt ?? lhs.importedAt) < (rhs.lastRefreshAt ?? rhs.importedAt)
+            }
+        case .nameAscending:
+            return accounts.sorted { lhs, rhs in
+                lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+            }
+        case .expiresSoonest:
+            return accounts.sorted { lhs, rhs in
+                (lhs.expiresAt ?? .distantFuture) < (rhs.expiresAt ?? .distantFuture)
+            }
+        case .expiresLatest:
+            return accounts.sorted { lhs, rhs in
+                (lhs.expiresAt ?? .distantPast) > (rhs.expiresAt ?? .distantPast)
+            }
+        }
+    }
+}
+
+@MainActor
+private enum WindowPositioner {
+    static func centerOnActiveScreen(_ window: NSWindow) {
+        let target = activeScreen() ?? window.screen ?? NSScreen.main
+        guard let target else { return }
+        let visible = target.visibleFrame
+        var frame = window.frame
+        frame.origin.x = visible.origin.x + (visible.width - frame.width) / 2
+        frame.origin.y = visible.origin.y + (visible.height - frame.height) / 2
+        window.setFrame(frame, display: true)
+    }
+
+    private static func activeScreen() -> NSScreen? {
+        let mouse = NSEvent.mouseLocation
+        if let hit = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) {
+            return hit
+        }
+        return NSScreen.screens.first { $0.frame.contains(NSApp.keyWindow?.frame.origin ?? mouse) }
+    }
 }
 
 private func codexStackLogoImage(progressMode: UtilizationProgressMode) -> NSImage {

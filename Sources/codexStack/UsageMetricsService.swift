@@ -46,10 +46,27 @@ struct UsageMetricsService {
         "gpt-5.5-pro": .init(inputPerToken: 3e-5, cachedInputPerToken: 3e-5, outputPerToken: 1.8e-4)
     ]
 
-    func loadUsageSnapshot(codexRoot: URL) -> UsageSnapshot {
-        let liveUsage = loadUsageFromOAuthAPI(codexRoot: codexRoot)
+    func loadUsageSnapshot(codexRoot: URL, preferredAccountID: String? = nil) -> UsageSnapshot {
+        let liveProfiles = loadAccountUsageProfiles(codexRoot: codexRoot)
         let cachedUsage = loadUsageFromRegistry(codexRoot: codexRoot)
-        let selectedUsage = mergedUsage(live: liveUsage, cached: cachedUsage)
+        let allProfiles = liveProfiles + (cachedUsage.map { [$0] } ?? [])
+        let mergedProfiles = dedupedAccountProfiles(allProfiles)
+        let accountSnapshots = mergedProfiles.map(makeAccountSnapshot(from:))
+
+        let preferred = accountSnapshots.first { $0.id == preferredAccountID }
+            ?? accountSnapshots.first { $0.sessionUsedRatio != nil || $0.weeklyUsedRatio != nil }
+            ?? accountSnapshots.first
+
+        let orderedAccountSnapshots: [UsageAccountSnapshot]
+        if let preferred {
+            var rest = accountSnapshots.filter { $0.id != preferred.id }
+            rest.insert(preferred, at: 0)
+            orderedAccountSnapshots = rest
+        } else {
+            orderedAccountSnapshots = accountSnapshots
+        }
+
+        let selectedUsage = preferred
 
         let now = Date()
         let thirtyDaysAgo = now.addingTimeInterval(-30 * 24 * 60 * 60)
@@ -161,19 +178,20 @@ struct UsageMetricsService {
 
         return UsageSnapshot(
             updatedAt: latestTimestamp,
-            accountEmail: selectedUsage?.accountEmail,
-            accountName: selectedUsage?.accountName,
+            accountEmail: selectedUsage?.email,
+            accountName: selectedUsage?.name,
             planType: selectedUsage?.planType,
             source: selectedUsage?.source ?? .unavailable,
-            sessionUsedRatio: selectedUsage?.primaryUsedRatio,
-            weeklyUsedRatio: selectedUsage?.secondaryUsedRatio,
-            sessionResetAt: selectedUsage?.primaryResetAt,
-            weeklyResetAt: selectedUsage?.secondaryResetAt,
+            sessionUsedRatio: selectedUsage?.sessionUsedRatio,
+            weeklyUsedRatio: selectedUsage?.weeklyUsedRatio,
+            sessionResetAt: selectedUsage?.sessionResetAt,
+            weeklyResetAt: selectedUsage?.weeklyResetAt,
             todayTokens: todayTokens,
             last30DaysTokens: last30Tokens,
             todayCostUSD: todayCost,
             last30DaysCostUSD: last30Cost,
-            dailyCostSeries: dailySeries
+            dailyCostSeries: dailySeries,
+            accounts: orderedAccountSnapshots
         )
     }
 
@@ -204,63 +222,182 @@ struct UsageMetricsService {
         return series
     }
 
-    private func mergedUsage(live: AccountUsageProfile?, cached: AccountUsageProfile?) -> AccountUsageProfile? {
-        guard live != nil || cached != nil else { return nil }
-
-        let liveHasUsageWindows = live?.primaryUsedRatio != nil || live?.secondaryUsedRatio != nil
-        let source: UsageSource = liveHasUsageWindows ? .live : (cached != nil ? .cached : .unavailable)
-
-        return AccountUsageProfile(
-            source: source,
-            accountEmail: live?.accountEmail ?? cached?.accountEmail,
-            accountName: live?.accountName ?? cached?.accountName,
-            planType: live?.planType ?? cached?.planType,
-            primaryUsedRatio: live?.primaryUsedRatio ?? cached?.primaryUsedRatio,
-            secondaryUsedRatio: live?.secondaryUsedRatio ?? cached?.secondaryUsedRatio,
-            primaryResetAt: live?.primaryResetAt ?? cached?.primaryResetAt,
-            secondaryResetAt: live?.secondaryResetAt ?? cached?.secondaryResetAt,
-            updatedAt: source == .live ? (live?.updatedAt ?? Date()) : cached?.updatedAt
-        )
+    private func loadAccountUsageProfiles(codexRoot: URL) -> [AccountUsageProfile] {
+        guard let usageURL = resolveUsageURL(codexRoot: codexRoot) else { return [] }
+        let credentials = loadOAuthCredentials(codexRoot: codexRoot) + loadImportedOAuthCredentials()
+        return credentials.compactMap { loadUsageProfile(usageURL: usageURL, credentials: $0) }
     }
 
-    private func loadUsageFromOAuthAPI(codexRoot: URL) -> AccountUsageProfile? {
-        guard let credentials = loadOAuthCredentials(codexRoot: codexRoot) else { return nil }
-        guard let usageURL = resolveUsageURL(codexRoot: codexRoot) else { return nil }
-        guard let response = fetchCodexUsage(usageURL: usageURL, credentials: credentials) else { return nil }
+    private func loadUsageProfile(usageURL: URL, credentials: OAuthCredentials) -> AccountUsageProfile? {
+        guard !credentials.disabled else { return nil }
+        let response = credentials.isExpired ? nil : fetchCodexUsage(usageURL: usageURL, credentials: credentials)
 
         let jwtPayload = credentials.idToken.flatMap(parseJWT)
+        let accessPayload = parseJWT(credentials.accessToken)
         let authProfile = jwtPayload?["https://api.openai.com/profile"] as? [String: Any]
+            ?? accessPayload?["https://api.openai.com/profile"] as? [String: Any]
         let authDetails = jwtPayload?["https://api.openai.com/auth"] as? [String: Any]
+            ?? accessPayload?["https://api.openai.com/auth"] as? [String: Any]
 
-        let primaryWindow = response.rateLimit?.primaryWindow
-        let secondaryWindow = response.rateLimit?.secondaryWindow
+        let primaryWindow = response?.rateLimit?.primaryWindow
+        let secondaryWindow = response?.rateLimit?.secondaryWindow
+        let accountID = credentials.accountId
+            ?? normalizedString(authDetails?["chatgpt_account_id"] as? String)
+        let email = normalizedString(
+            credentials.email
+                ?? authProfile?["email"] as? String
+                ?? jwtPayload?["email"] as? String
+                ?? accessPayload?["email"] as? String
+        )
 
         let profile = AccountUsageProfile(
-            source: .live,
-            accountEmail: normalizedString(
-                authProfile?["email"] as? String
-                    ?? jwtPayload?["email"] as? String
-            ),
+            id: accountID ?? email ?? credentials.id,
+            accountID: accountID,
+            source: response == nil ? .unavailable : .live,
+            accountEmail: email,
             accountName: nil,
+            note: credentials.note,
             planType: normalizedString(
-                response.planType
+                response?.planType
                     ?? authDetails?["chatgpt_plan_type"] as? String
                     ?? jwtPayload?["chatgpt_plan_type"] as? String
+                    ?? accessPayload?["chatgpt_plan_type"] as? String
             ),
             primaryUsedRatio: primaryWindow.map { clampPercent(Double($0.usedPercent)) / 100 },
             secondaryUsedRatio: secondaryWindow.map { clampPercent(Double($0.usedPercent)) / 100 },
             primaryResetAt: primaryWindow.map { Date(timeIntervalSince1970: TimeInterval($0.resetAt)) },
             secondaryResetAt: secondaryWindow.map { Date(timeIntervalSince1970: TimeInterval($0.resetAt)) },
-            updatedAt: Date()
+            updatedAt: response == nil ? credentials.lastRefreshAt : Date(),
+            expiresAt: credentials.expiresAt,
+            importedAt: credentials.importedAt,
+            isCurrentCodexAccount: credentials.isCurrentCodexAccount,
+            isCredentialExpired: credentials.isExpired
         )
 
         if profile.accountEmail == nil &&
+            profile.accountID == nil &&
+            profile.note == nil &&
             profile.planType == nil &&
             profile.primaryUsedRatio == nil &&
             profile.secondaryUsedRatio == nil {
             return nil
         }
         return profile
+    }
+
+    private func dedupedAccountProfiles(_ profiles: [AccountUsageProfile]) -> [AccountUsageProfile] {
+        var groups: [(keys: Set<String>, profile: AccountUsageProfile)] = []
+
+        for profile in profiles {
+            let incomingKeys = identityKeys(for: profile)
+            if let idx = groups.firstIndex(where: { !$0.keys.intersection(incomingKeys).isEmpty }) {
+                let merged = mergeProfiles(groups[idx].profile, profile)
+                let combinedKeys = groups[idx].keys.union(incomingKeys).union(identityKeys(for: merged))
+                groups[idx] = (combinedKeys, merged)
+            } else {
+                groups.append((incomingKeys, profile))
+            }
+        }
+
+        return groups.map(\.profile).sorted { lhs, rhs in
+            if lhs.isCurrentCodexAccount != rhs.isCurrentCodexAccount {
+                return lhs.isCurrentCodexAccount
+            }
+            return profileSortDate(lhs) > profileSortDate(rhs)
+        }
+    }
+
+    private func identityKeys(for profile: AccountUsageProfile) -> Set<String> {
+        var keys: Set<String> = []
+        if let id = profile.accountID, !id.isEmpty {
+            keys.insert("acct:" + id)
+        }
+        if let email = profile.accountEmail, !email.isEmpty {
+            keys.insert("email:" + email.lowercased())
+        }
+        if keys.isEmpty {
+            keys.insert("self:" + profile.id)
+        }
+        return keys
+    }
+
+    private func mergeProfiles(_ existing: AccountUsageProfile, _ incoming: AccountUsageProfile) -> AccountUsageProfile {
+        let winner: AccountUsageProfile
+        let loser: AccountUsageProfile
+        if existing.isCredentialExpired != incoming.isCredentialExpired {
+            winner = existing.isCredentialExpired ? incoming : existing
+            loser = existing.isCredentialExpired ? existing : incoming
+        } else {
+            let existingHasUsage = existing.primaryUsedRatio != nil || existing.secondaryUsedRatio != nil
+            let incomingHasUsage = incoming.primaryUsedRatio != nil || incoming.secondaryUsedRatio != nil
+            if existingHasUsage != incomingHasUsage {
+                winner = existingHasUsage ? existing : incoming
+                loser = existingHasUsage ? incoming : existing
+            } else if profileSortDate(existing) >= profileSortDate(incoming) {
+                winner = existing
+                loser = incoming
+            } else {
+                winner = incoming
+                loser = existing
+            }
+        }
+
+        let preferLiveSource = winner.source == .live || loser.source == .live
+        let mergedSource: UsageSource = preferLiveSource
+            ? .live
+            : (winner.source != .unavailable ? winner.source : loser.source)
+
+        let updatedAt: Date? = {
+            switch (winner.updatedAt, loser.updatedAt) {
+            case let (a?, b?): return a > b ? a : b
+            case let (a?, nil): return a
+            case let (nil, b?): return b
+            default: return nil
+            }
+        }()
+
+        return AccountUsageProfile(
+            id: winner.accountID ?? loser.accountID ?? winner.accountEmail ?? loser.accountEmail ?? winner.id,
+            accountID: winner.accountID ?? loser.accountID,
+            source: mergedSource,
+            accountEmail: winner.accountEmail ?? loser.accountEmail,
+            accountName: winner.accountName ?? loser.accountName,
+            note: winner.note ?? loser.note,
+            planType: winner.planType ?? loser.planType,
+            primaryUsedRatio: winner.primaryUsedRatio ?? loser.primaryUsedRatio,
+            secondaryUsedRatio: winner.secondaryUsedRatio ?? loser.secondaryUsedRatio,
+            primaryResetAt: winner.primaryResetAt ?? loser.primaryResetAt,
+            secondaryResetAt: winner.secondaryResetAt ?? loser.secondaryResetAt,
+            updatedAt: updatedAt,
+            expiresAt: winner.expiresAt ?? loser.expiresAt,
+            importedAt: winner.importedAt ?? loser.importedAt,
+            isCurrentCodexAccount: winner.isCurrentCodexAccount || loser.isCurrentCodexAccount,
+            isCredentialExpired: winner.isCredentialExpired && loser.isCredentialExpired
+        )
+    }
+
+    private func profileSortDate(_ profile: AccountUsageProfile) -> Date {
+        profile.updatedAt ?? profile.importedAt ?? profile.expiresAt ?? .distantPast
+    }
+
+    private func makeAccountSnapshot(from profile: AccountUsageProfile) -> UsageAccountSnapshot {
+        UsageAccountSnapshot(
+            id: profile.accountID ?? profile.accountEmail ?? profile.id,
+            accountID: profile.accountID,
+            email: profile.accountEmail,
+            name: profile.accountName,
+            note: profile.note,
+            planType: profile.planType,
+            source: profile.source,
+            sessionUsedRatio: profile.primaryUsedRatio,
+            weeklyUsedRatio: profile.secondaryUsedRatio,
+            sessionResetAt: profile.primaryResetAt,
+            weeklyResetAt: profile.secondaryResetAt,
+            updatedAt: profile.updatedAt,
+            expiresAt: profile.expiresAt,
+            isCurrentCodexAccount: profile.isCurrentCodexAccount,
+            isCredentialExpired: profile.isCredentialExpired
+        )
     }
 
     private func resolveUsageURL(codexRoot: URL) -> URL? {
@@ -348,15 +485,29 @@ struct UsageMetricsService {
         return decoded
     }
 
-    private func loadOAuthCredentials(codexRoot: URL) -> OAuthCredentials? {
+    private func loadOAuthCredentials(codexRoot: URL) -> [OAuthCredentials] {
         let authURL = codexRoot.appending(path: "auth.json")
         guard let data = try? Data(contentsOf: authURL),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return nil
+            return []
         }
 
         if let apiKey = normalizedString(root["OPENAI_API_KEY"] as? String) {
-            return OAuthCredentials(accessToken: apiKey, idToken: nil, accountId: nil)
+            return [
+                OAuthCredentials(
+                    id: "codex-api-key",
+                    accessToken: apiKey,
+                    idToken: nil,
+                    accountId: nil,
+                    email: nil,
+                    note: "Codex auth.json",
+                    expiresAt: nil,
+                    lastRefreshAt: nil,
+                    importedAt: nil,
+                    disabled: false,
+                    isCurrentCodexAccount: true
+                )
+            ]
         }
 
         guard let tokens = root["tokens"] as? [String: Any],
@@ -364,14 +515,55 @@ struct UsageMetricsService {
                   tokens["access_token"] as? String
                       ?? tokens["accessToken"] as? String
               ) else {
-            return nil
+            return []
         }
 
-        return OAuthCredentials(
-            accessToken: accessToken,
-            idToken: normalizedString(tokens["id_token"] as? String ?? tokens["idToken"] as? String),
-            accountId: normalizedString(tokens["account_id"] as? String ?? tokens["accountId"] as? String)
-        )
+        let idToken = normalizedString(tokens["id_token"] as? String ?? tokens["idToken"] as? String)
+        let accessPayload = parseJWT(accessToken)
+        let idPayload = idToken.flatMap(parseJWT)
+        let authDetails = (idPayload?["https://api.openai.com/auth"] as? [String: Any])
+            ?? (accessPayload?["https://api.openai.com/auth"] as? [String: Any])
+        let profile = (idPayload?["https://api.openai.com/profile"] as? [String: Any])
+            ?? (accessPayload?["https://api.openai.com/profile"] as? [String: Any])
+        let accountID = normalizedString(authDetails?["chatgpt_account_id"] as? String)
+            ?? normalizedString(tokens["account_id"] as? String ?? tokens["accountId"] as? String)
+        let email = normalizedString(profile?["email"] as? String)
+            ?? normalizedString(idPayload?["email"] as? String)
+            ?? normalizedString(accessPayload?["email"] as? String)
+
+        return [
+            OAuthCredentials(
+                id: accountID ?? email ?? "codex-auth-json",
+                accessToken: accessToken,
+                idToken: idToken,
+                accountId: accountID,
+                email: email,
+                note: "Codex auth.json",
+                expiresAt: jwtExpiration(accessPayload) ?? jwtExpiration(idPayload),
+                lastRefreshAt: nil,
+                importedAt: nil,
+                disabled: false,
+                isCurrentCodexAccount: true
+            )
+        ]
+    }
+
+    private func loadImportedOAuthCredentials() -> [OAuthCredentials] {
+        AccountCredentialStore.loadAccounts().map { account in
+            OAuthCredentials(
+                id: account.id,
+                accessToken: account.accessToken,
+                idToken: account.idToken,
+                accountId: account.accountID,
+                email: account.email,
+                note: account.note,
+                expiresAt: account.expiresAt,
+                lastRefreshAt: account.lastRefreshAt,
+                importedAt: account.importedAt,
+                disabled: false,
+                isCurrentCodexAccount: false
+            )
+        }
     }
 
     private func loadUsageFromRegistry(codexRoot: URL) -> AccountUsageProfile? {
@@ -423,6 +615,17 @@ struct UsageMetricsService {
 
         guard let data = Data(base64Encoded: padded) else { return nil }
         return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    private func jwtExpiration(_ payload: [String: Any]?) -> Date? {
+        guard let payload else { return nil }
+        if let value = payload["exp"] as? TimeInterval {
+            return Date(timeIntervalSince1970: value)
+        }
+        if let value = payload["exp"] as? NSNumber {
+            return Date(timeIntervalSince1970: value.doubleValue)
+        }
+        return nil
     }
 
     private func collectSessionFiles(roots: [URL]) -> [URL] {
@@ -691,21 +894,77 @@ private struct DayBucket {
 }
 
 private struct AccountUsageProfile {
+    let id: String
+    let accountID: String?
     let source: UsageSource
     let accountEmail: String?
     let accountName: String?
+    let note: String?
     let planType: String?
     let primaryUsedRatio: Double?
     let secondaryUsedRatio: Double?
     let primaryResetAt: Date?
     let secondaryResetAt: Date?
     let updatedAt: Date?
+    let expiresAt: Date?
+    let importedAt: Date?
+    let isCurrentCodexAccount: Bool
+    let isCredentialExpired: Bool
+
+    init(
+        id: String = UUID().uuidString,
+        accountID: String? = nil,
+        source: UsageSource,
+        accountEmail: String?,
+        accountName: String?,
+        note: String? = nil,
+        planType: String?,
+        primaryUsedRatio: Double?,
+        secondaryUsedRatio: Double?,
+        primaryResetAt: Date?,
+        secondaryResetAt: Date?,
+        updatedAt: Date?,
+        expiresAt: Date? = nil,
+        importedAt: Date? = nil,
+        isCurrentCodexAccount: Bool = false,
+        isCredentialExpired: Bool = false
+    ) {
+        self.id = id
+        self.accountID = accountID
+        self.source = source
+        self.accountEmail = accountEmail
+        self.accountName = accountName
+        self.note = note
+        self.planType = planType
+        self.primaryUsedRatio = primaryUsedRatio
+        self.secondaryUsedRatio = secondaryUsedRatio
+        self.primaryResetAt = primaryResetAt
+        self.secondaryResetAt = secondaryResetAt
+        self.updatedAt = updatedAt
+        self.expiresAt = expiresAt
+        self.importedAt = importedAt
+        self.isCurrentCodexAccount = isCurrentCodexAccount
+        self.isCredentialExpired = isCredentialExpired
+    }
 }
 
 private struct OAuthCredentials {
+    let id: String
     let accessToken: String
     let idToken: String?
     let accountId: String?
+    let email: String?
+    let note: String?
+    let expiresAt: Date?
+    let lastRefreshAt: Date?
+    let importedAt: Date?
+    let disabled: Bool
+    let isCurrentCodexAccount: Bool
+
+    var isExpired: Bool {
+        guard let expiresAt else { return false }
+        return expiresAt <= Date()
+    }
 }
 
 private struct CodexUsageAPIResponse: Decodable {
