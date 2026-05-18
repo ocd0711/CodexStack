@@ -18,8 +18,13 @@ cask "codex-stack" do
 
   postflight do
     system_command "/usr/bin/xattr",
-                   args: ["-dr", "com.apple.quarantine", "#{appdir}/codexStack.app"],
-                   sudo: false,
+                   args:         ["-dr", "com.apple.quarantine", "#{appdir}/codexStack.app"],
+                   sudo:         false,
+                   must_succeed: false,
+                   print_stdout: false,
+                   print_stderr: false
+    system_command "/usr/bin/open",
+                   args:         ["-a", "#{appdir}/codexStack.app"],
                    must_succeed: false,
                    print_stdout: false,
                    print_stderr: false
