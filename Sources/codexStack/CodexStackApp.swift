@@ -710,7 +710,12 @@ private struct MenuBarPanel: View {
                 sessions: []
             )
         }
-        return groups.sorted { $0.latest > $1.latest }
+        return groups.sorted {
+            if $0.latest != $1.latest {
+                return $0.latest > $1.latest
+            }
+            return $0.projectName.localizedStandardCompare($1.projectName) == .orderedAscending
+        }
     }
 
     private var accountLabel: String {
