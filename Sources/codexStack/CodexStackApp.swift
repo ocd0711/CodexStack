@@ -169,11 +169,25 @@ private struct MenuBarPanel: View {
     @State private var hoverProjectsCard = false
     @State private var hoverDetailPane = false
     @State private var closePaneTask: Task<Void, Never>?
+    @AppStorage("accountsSortOption") private var accountsSortRaw: String = AccountsSortOption.importedNewest.rawValue
+    @AppStorage("accountsManualOrder") private var accountsManualOrderRaw: String = ""
+
+    private var sortedAccounts: [UsageAccountSnapshot] {
+        let sortOption = AccountsSortOption(rawValue: accountsSortRaw) ?? .importedNewest
+        let manualOrderIDs = accountsManualOrderRaw
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map(String.init)
+        return sortOption.sort(store.usage.accounts, manualOrder: manualOrderIDs)
+    }
 
     var body: some View {
         VStack(spacing: 10) {
             header
-            UtilizationSection(usage: store.usage, progressMode: store.utilizationProgressMode)
+            UtilizationSection(
+                usage: store.usage,
+                accounts: sortedAccounts,
+                progressMode: store.utilizationProgressMode
+            )
             costSummaryCard
             projectsSummaryCard
             actionsRow
@@ -221,7 +235,7 @@ private struct MenuBarPanel: View {
 
     @ViewBuilder
     private var accountSwitcher: some View {
-        let accounts = store.usage.accounts
+        let accounts = sortedAccounts
         if accounts.count > 1 {
             Menu {
                 ForEach(accounts) { account in
@@ -993,10 +1007,11 @@ private struct MouseLocationReader: NSViewRepresentable {
 
 private struct UtilizationSection: View {
     let usage: UsageSnapshot
+    let accounts: [UsageAccountSnapshot]
     let progressMode: UtilizationProgressMode
 
     private var accountSections: [UsageAccountSnapshot] {
-        if !usage.accounts.isEmpty { return usage.accounts }
+        if !accounts.isEmpty { return accounts }
         let fallback = UsageAccountSnapshot(
             id: usage.accountEmail ?? "primary",
             accountID: nil,
@@ -2353,6 +2368,44 @@ private enum AccountsSortOption: String, CaseIterable, Identifiable {
         case .nameAscending:
             return accounts.sorted { lhs, rhs in
                 lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+            }
+        case .expiresSoonest:
+            return accounts.sorted { lhs, rhs in
+                (lhs.expiresAt ?? .distantFuture) < (rhs.expiresAt ?? .distantFuture)
+            }
+        case .expiresLatest:
+            return accounts.sorted { lhs, rhs in
+                (lhs.expiresAt ?? .distantPast) > (rhs.expiresAt ?? .distantPast)
+            }
+        }
+    }
+
+    func sort(
+        _ accounts: [UsageAccountSnapshot],
+        manualOrder: [String] = []
+    ) -> [UsageAccountSnapshot] {
+        switch self {
+        case .manual:
+            let position = Dictionary(uniqueKeysWithValues: manualOrder.enumerated().map { ($1, $0) })
+            return accounts.sorted { lhs, rhs in
+                let lhsIdx = position[lhs.id] ?? Int.max
+                let rhsIdx = position[rhs.id] ?? Int.max
+                if lhsIdx != rhsIdx { return lhsIdx < rhsIdx }
+                return (lhs.updatedAt ?? .distantPast) > (rhs.updatedAt ?? .distantPast)
+            }
+        case .importedNewest:
+            return accounts.sorted { lhs, rhs in
+                (lhs.updatedAt ?? .distantPast) > (rhs.updatedAt ?? .distantPast)
+            }
+        case .importedOldest:
+            return accounts.sorted { lhs, rhs in
+                (lhs.updatedAt ?? .distantPast) < (rhs.updatedAt ?? .distantPast)
+            }
+        case .nameAscending:
+            return accounts.sorted { lhs, rhs in
+                let lhsName = lhs.name ?? lhs.email ?? lhs.id
+                let rhsName = rhs.name ?? rhs.email ?? rhs.id
+                return lhsName.localizedCaseInsensitiveCompare(rhsName) == .orderedAscending
             }
         case .expiresSoonest:
             return accounts.sorted { lhs, rhs in
