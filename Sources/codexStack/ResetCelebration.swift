@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import QuartzCore
 
 enum ResetCelebrationKind: Sendable {
     case session
@@ -33,7 +34,7 @@ enum ResetCelebrationKind: Sendable {
     var accent: Color {
         switch self {
         case .session: return Color(nsColor: .systemTeal)
-        case .weekly: return Color(nsColor: .systemPink)
+        case .weekly: return Color(nsColor: .systemPurple)
         }
     }
 }
@@ -59,6 +60,7 @@ final class ResetCelebrationController {
         if let existing = self.window {
             window = existing
             window.setFrame(frame, display: false)
+            window.alphaValue = 1
         } else {
             window = NSWindow(
                 contentRect: frame,
@@ -97,8 +99,16 @@ final class ResetCelebrationController {
     func dismiss() {
         dismissTask?.cancel()
         dismissTask = nil
-        window?.orderOut(nil)
-        window?.contentView = nil
+        if let win = window {
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.4
+                win.animator().alphaValue = 0
+            }, completionHandler: {
+                win.orderOut(nil)
+                win.contentView = nil
+                win.alphaValue = 1
+            })
+        }
     }
 
     private func activeScreen() -> NSScreen? {
@@ -112,110 +122,156 @@ private struct ResetCelebrationView: View {
     let onDismiss: () -> Void
 
     @State private var appeared = false
+    @State private var emojiScale: CGFloat = 0.3
+    @State private var emojiRotation: Double = -30
 
     var body: some View {
         ZStack {
-            Color.black.opacity(appeared ? 0.32 : 0)
+            // Subtle backdrop dimming
+            Color.black.opacity(appeared ? 0.3 : 0)
                 .ignoresSafeArea()
                 .onTapGesture { onDismiss() }
 
-            ConfettiCanvas(accent: kind.accent)
+            // High-performance physics confetti layer
+            ConfettiNSViewRepresentable()
+                .ignoresSafeArea()
                 .allowsHitTesting(false)
 
-            VStack(spacing: 18) {
+            // Central beautifully styled card
+            VStack(spacing: 16) {
                 Text(kind.emoji)
-                    .font(.system(size: 96))
-                    .scaleEffect(appeared ? 1 : 0.5)
-                    .rotationEffect(.degrees(appeared ? 0 : -25))
-                Text(kind.title)
-                    .font(.system(size: 44, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .shadow(color: .black.opacity(0.4), radius: 12, y: 4)
-                Text(kind.subtitle)
-                    .font(.system(size: 18, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .shadow(color: .black.opacity(0.35), radius: 8, y: 3)
+                    .font(.system(size: 84))
+                    .scaleEffect(emojiScale)
+                    .rotationEffect(.degrees(emojiRotation))
+                    .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+                    .padding(.bottom, 6)
+                
+                VStack(spacing: 6) {
+                    Text(kind.title)
+                        .font(.system(size: 32, weight: .bold, design: .rounded))
+                        .foregroundStyle(.primary)
+                    
+                    Text(kind.subtitle)
+                        .font(.system(size: 16, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
             }
-            .padding(40)
+            .padding(.horizontal, 40)
+            .padding(.top, 32)
+            .padding(.bottom, 36)
             .background(
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .fill(.ultraThinMaterial)
+                RoundedRectangle(cornerRadius: 32, style: .continuous)
+                    .fill(.regularMaterial)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 28, style: .continuous)
-                            .stroke(kind.accent.opacity(0.55), lineWidth: 2)
+                        RoundedRectangle(cornerRadius: 32, style: .continuous)
+                            .stroke(.white.opacity(0.2), lineWidth: 1)
                     )
-                    .shadow(color: kind.accent.opacity(0.6), radius: 30)
-                    .opacity(appeared ? 1 : 0)
             )
-            .scaleEffect(appeared ? 1 : 0.85)
+            .shadow(color: .black.opacity(0.25), radius: 40, y: 20)
+            .background(
+                kind.accent
+                    .opacity(appeared ? 0.15 : 0)
+                    .blur(radius: 60)
+                    .scaleEffect(appeared ? 1.2 : 0.8)
+            )
+            .scaleEffect(appeared ? 1 : 0.9)
             .opacity(appeared ? 1 : 0)
         }
         .onAppear {
-            withAnimation(.spring(response: 0.55, dampingFraction: 0.7)) {
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.75)) {
                 appeared = true
             }
-        }
-    }
-}
-
-private struct ConfettiCanvas: View {
-    let accent: Color
-    @State private var pieces: [ConfettiPiece] = ConfettiPiece.generate(count: 110)
-    @State private var start = Date()
-
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
-            Canvas { context, size in
-                let elapsed = timeline.date.timeIntervalSince(start)
-                for piece in pieces {
-                    let t = elapsed * piece.speed
-                    let progress = (t + piece.phase).truncatingRemainder(dividingBy: 1.6) / 1.6
-                    let x = piece.x * size.width + sin((elapsed + piece.phase) * piece.wobble) * 28
-                    let y = -40 + CGFloat(progress) * (size.height + 80)
-                    let rotation = Angle.degrees((elapsed * 180 + piece.phase * 360) * piece.spin)
-
-                    var ctx = context
-                    ctx.translateBy(x: x, y: y)
-                    ctx.rotate(by: rotation)
-                    let rect = CGRect(x: -piece.size.width / 2, y: -piece.size.height / 2,
-                                      width: piece.size.width, height: piece.size.height)
-                    let color = piece.useAccent ? accent : piece.color
-                    ctx.fill(Path(roundedRect: rect, cornerRadius: 1.5), with: .color(color))
-                }
+            withAnimation(.spring(response: 0.6, dampingFraction: 0.5).delay(0.1)) {
+                emojiScale = 1.0
+                emojiRotation = 0
             }
         }
     }
 }
 
-private struct ConfettiPiece {
-    let x: CGFloat
-    let size: CGSize
-    let color: Color
-    let useAccent: Bool
-    let speed: Double
-    let phase: Double
-    let wobble: Double
-    let spin: Double
+private struct ConfettiNSViewRepresentable: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = ConfettiEmitterView()
+        view.fire()
+        return view
+    }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
 
-    static func generate(count: Int) -> [ConfettiPiece] {
-        let palette: [Color] = [
-            Color(red: 1.00, green: 0.78, blue: 0.20),
-            Color(red: 0.36, green: 0.78, blue: 1.00),
-            Color(red: 1.00, green: 0.45, blue: 0.65),
-            Color(red: 0.55, green: 0.95, blue: 0.55),
-            Color(red: 0.78, green: 0.55, blue: 1.00)
+private class ConfettiEmitterView: NSView {
+    private let emitter = CAEmitterLayer()
+
+    override var isFlipped: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.addSublayer(emitter)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        emitter.emitterPosition = CGPoint(x: bounds.midX, y: -20)
+        emitter.emitterSize = CGSize(width: bounds.width, height: 1)
+        emitter.emitterShape = .line
+    }
+
+    func fire() {
+        emitter.seed = arc4random()
+        let colors: [NSColor] = [
+            NSColor(red: 1.0, green: 0.2, blue: 0.3, alpha: 1.0),
+            NSColor(red: 0.1, green: 0.6, blue: 1.0, alpha: 1.0),
+            NSColor(red: 1.0, green: 0.8, blue: 0.1, alpha: 1.0),
+            NSColor(red: 0.2, green: 0.8, blue: 0.4, alpha: 1.0),
+            NSColor(red: 0.6, green: 0.3, blue: 1.0, alpha: 1.0),
+            NSColor.white
         ]
-        return (0..<count).map { _ in
-            ConfettiPiece(
-                x: CGFloat.random(in: 0...1),
-                size: CGSize(width: CGFloat.random(in: 6...11), height: CGFloat.random(in: 9...16)),
-                color: palette.randomElement() ?? .white,
-                useAccent: Bool.random() && Bool.random(),
-                speed: Double.random(in: 0.45...0.85),
-                phase: Double.random(in: 0...1.6),
-                wobble: Double.random(in: 1.4...3.2),
-                spin: Double.random(in: 0.6...1.8)
-            )
+
+        let rectImage = makeConfettiImage(size: CGSize(width: 12, height: 18), cornerRadius: 2)
+        let circleImage = makeConfettiImage(size: CGSize(width: 14, height: 14), cornerRadius: 7)
+
+        var cells: [CAEmitterCell] = []
+        for color in colors {
+            for image in [rectImage, circleImage] {
+                let cell = CAEmitterCell()
+                cell.contents = image
+                cell.color = color.cgColor
+                cell.birthRate = 18
+                cell.lifetime = 8.0
+                cell.velocity = 250
+                cell.velocityRange = 100
+                cell.emissionLongitude = .pi / 2 // pointing down
+                cell.emissionRange = .pi // 180 degree spread
+                cell.spin = 3
+                cell.spinRange = 5
+                cell.scale = 0.5
+                cell.scaleRange = 0.2
+                cell.yAcceleration = 350
+                cell.xAcceleration = CGFloat.random(in: -40...40)
+                cell.alphaSpeed = -0.05
+                cells.append(cell)
+            }
         }
+
+        emitter.emitterCells = cells
+        emitter.beginTime = CACurrentMediaTime()
+
+        // Stop birthing after a burst duration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            self.emitter.birthRate = 0
+        }
+    }
+
+    private func makeConfettiImage(size: CGSize, cornerRadius: CGFloat) -> CGImage? {
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSColor.white.set()
+        let path = NSBezierPath(roundedRect: NSRect(origin: .zero, size: size), xRadius: cornerRadius, yRadius: cornerRadius)
+        path.fill()
+        image.unlockFocus()
+        return image.cgImage(forProposedRect: nil, context: nil, hints: nil)
     }
 }
