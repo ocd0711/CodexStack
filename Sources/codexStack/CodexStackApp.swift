@@ -186,7 +186,8 @@ private struct MenuBarPanel: View {
             UtilizationSection(
                 usage: store.usage,
                 accounts: sortedAccounts,
-                progressMode: store.utilizationProgressMode
+                progressMode: store.utilizationProgressMode,
+                activeAccountID: activeAccountID
             )
             costSummaryCard
             projectsSummaryCard
@@ -271,7 +272,7 @@ private struct MenuBarPanel: View {
     }
 
     private var activeAccountID: String? {
-        store.preferredAccountID ?? store.usage.accounts.first?.id
+        store.preferredAccountID ?? sortedAccounts.first?.id
     }
 
     private func accountMenuLabel(for account: UsageAccountSnapshot) -> String {
@@ -698,8 +699,9 @@ private struct MenuBarPanel: View {
     }
 
     private var accountLabel: String {
-        if let active = store.usage.accounts.first,
-           let label = accountDisplayLabel(for: active) {
+        let activeID = activeAccountID
+        let active = sortedAccounts.first { $0.id == activeID } ?? sortedAccounts.first
+        if let active, let label = accountDisplayLabel(for: active) {
             return label
         }
         if let email = store.usage.accountEmail, !email.isEmpty {
@@ -728,7 +730,9 @@ private struct MenuBarPanel: View {
     }
 
     private var planLabel: String {
-        guard let plan = store.usage.planType, !plan.isEmpty else {
+        let activeID = activeAccountID
+        let activeAccount = sortedAccounts.first { $0.id == activeID } ?? sortedAccounts.first
+        guard let plan = activeAccount?.planType ?? store.usage.planType, !plan.isEmpty else {
             return "No Plan"
         }
         return plan.uppercased()
@@ -1009,9 +1013,15 @@ private struct UtilizationSection: View {
     let usage: UsageSnapshot
     let accounts: [UsageAccountSnapshot]
     let progressMode: UtilizationProgressMode
+    let activeAccountID: String?
 
     private var accountSections: [UsageAccountSnapshot] {
-        if !accounts.isEmpty { return accounts }
+        if !accounts.isEmpty {
+            guard let activeAccountID, let match = accounts.first(where: { $0.id == activeAccountID }) else {
+                return accounts
+            }
+            return [match] + accounts.filter { $0.id != activeAccountID }
+        }
         let fallback = UsageAccountSnapshot(
             id: usage.accountEmail ?? "primary",
             accountID: nil,
