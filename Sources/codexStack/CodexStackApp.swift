@@ -1459,7 +1459,7 @@ private struct SettingsWindowView: View {
                 }
                 SettingsDivider()
                 SettingsLine(title: localized("Updates"), subtitle: localized("Check the latest version from GitHub Releases.")) {
-                    Button(isCheckingUpdates ? localized("Checking...") : localized("Check for Updates"), action: checkForUpdates)
+                    Button(updateButtonTitle, action: checkForUpdates)
                         .disabled(isCheckingUpdates)
                 }
                 SettingsDivider()
@@ -1540,13 +1540,24 @@ private struct SettingsWindowView: View {
             do {
                 let release = try await GitHubReleaseChecker.fetchLatest()
                 if compareVersions(release.version, currentVersion) == .orderedDescending {
-                    updateAlert = UpdateAlert(
-                        title: String(format: localized("codexStack %@ is available."), release.tagName),
-                        message: localized("Open the GitHub Release page to download the latest build.")
-                    )
-                    if let url = URL(string: release.htmlURL) {
-                        NSWorkspace.shared.open(url)
+                    guard let asset = release.macOSZipAsset else {
+                        updateAlert = UpdateAlert(
+                            title: localized("No macOS update package found."),
+                            message: localized("Latest GitHub Release does not contain a macOS zip package.")
+                        )
+                        if let url = URL(string: release.htmlURL) {
+                            NSWorkspace.shared.open(url)
+                        }
+                        return
                     }
+
+                    let localURL = try await GitHubReleaseChecker.download(asset: asset)
+                    NSWorkspace.shared.open(localURL)
+                    NSWorkspace.shared.activateFileViewerSelecting([localURL])
+                    updateAlert = UpdateAlert(
+                        title: localized("Update Downloaded"),
+                        message: localized("The update archive was downloaded and opened. Quit codexStack and replace the app to finish updating.")
+                    )
                 } else {
                     updateAlert = UpdateAlert(
                         title: localized("codexStack is up to date."),
@@ -1560,6 +1571,10 @@ private struct SettingsWindowView: View {
                 )
             }
         }
+    }
+
+    private var updateButtonTitle: String {
+        isCheckingUpdates ? localized("Downloading...") : localized("Check for Updates")
     }
 
     private var appVersionText: String {
@@ -1690,14 +1705,35 @@ private func codexStackLogoImage(progressMode: UtilizationProgressMode) -> NSIma
 private struct GitHubRelease: Decodable {
     let tagName: String
     let htmlURL: String
+    let assets: [GitHubReleaseAsset]
 
     var version: String {
         tagName.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
     }
 
+    var macOSZipAsset: GitHubReleaseAsset? {
+        assets.first { asset in
+            let name = asset.name.lowercased()
+            return name.hasSuffix(".zip") && name.contains("macos")
+        } ?? assets.first { asset in
+            asset.name.lowercased().hasSuffix(".zip")
+        }
+    }
+
     enum CodingKeys: String, CodingKey {
         case tagName = "tag_name"
         case htmlURL = "html_url"
+        case assets
+    }
+}
+
+private struct GitHubReleaseAsset: Decodable {
+    let name: String
+    let browserDownloadURL: String
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case browserDownloadURL = "browser_download_url"
     }
 }
 
@@ -1713,6 +1749,53 @@ private enum GitHubReleaseChecker {
             throw URLError(.badServerResponse)
         }
         return try JSONDecoder().decode(GitHubRelease.self, from: data)
+    }
+
+    static func download(asset: GitHubReleaseAsset) async throws -> URL {
+        guard let url = URL(string: asset.browserDownloadURL) else {
+            throw URLError(.badURL)
+        }
+
+        var request = URLRequest(url: url)
+        request.setValue("codexStack", forHTTPHeaderField: "User-Agent")
+        let (temporaryURL, response) = try await URLSession.shared.download(for: request)
+        if let httpResponse = response as? HTTPURLResponse,
+           !(200..<300).contains(httpResponse.statusCode) {
+            throw URLError(.badServerResponse)
+        }
+
+        let downloadsDirectory = try FileManager.default.url(
+            for: .downloadsDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let destinationURL = uniqueDownloadURL(
+            in: downloadsDirectory,
+            preferredName: asset.name.isEmpty ? "codexStack-update.zip" : asset.name
+        )
+        try FileManager.default.moveItem(at: temporaryURL, to: destinationURL)
+        return destinationURL
+    }
+
+    private static func uniqueDownloadURL(in directory: URL, preferredName: String) -> URL {
+        let baseURL = directory.appendingPathComponent(preferredName)
+        guard FileManager.default.fileExists(atPath: baseURL.path) else {
+            return baseURL
+        }
+
+        let fileExtension = baseURL.pathExtension
+        let baseName = baseURL.deletingPathExtension().lastPathComponent
+        for index in 1...999 {
+            let candidateName = fileExtension.isEmpty
+                ? "\(baseName)-\(index)"
+                : "\(baseName)-\(index).\(fileExtension)"
+            let candidateURL = directory.appendingPathComponent(candidateName)
+            if !FileManager.default.fileExists(atPath: candidateURL.path) {
+                return candidateURL
+            }
+        }
+        return directory.appendingPathComponent(UUID().uuidString + "-" + preferredName)
     }
 }
 

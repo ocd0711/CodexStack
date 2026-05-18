@@ -39,6 +39,36 @@ jobs:
             "build/codexStack.xcarchive/Products/Applications/codexStack.app" \
             "dist/codexStack-${{ github.ref_name }}-macos.zip"
 
+      - name: Update Homebrew cask
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          ZIP_PATH="dist/codexStack-${GITHUB_REF_NAME}-macos.zip"
+          SHA256="$(shasum -a 256 "${ZIP_PATH}" | awk '{print $1}')"
+          export VERSION SHA256
+
+          git fetch origin "${{ github.event.repository.default_branch }}"
+          git checkout "${{ github.event.repository.default_branch }}"
+
+          ruby -e '
+            path = "Casks/codex-stack.rb"
+            version = ENV.fetch("VERSION")
+            sha256 = ENV.fetch("SHA256")
+            text = File.read(path)
+            text = text.gsub(/version "[^"]+"/, "version \"#{version}\"")
+            text = text.gsub(/sha256 (?::no_check|"[^"]+")/, "sha256 \"#{sha256}\"")
+            File.write(path, text)
+          '
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/codex-stack.rb
+          if ! git diff --cached --quiet; then
+            git commit -m "Update Homebrew cask for ${GITHUB_REF_NAME}"
+            git push origin "HEAD:${{ github.event.repository.default_branch }}"
+          fi
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:

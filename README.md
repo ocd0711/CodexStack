@@ -27,6 +27,28 @@ codexStack is a native macOS menu bar app for managing local Codex sessions.
 
 Default root path is `~/.codex`, configurable in `Settings...` from the menu bar.
 
+## Install
+
+Homebrew Cask installation is supported from this repository tap:
+
+```bash
+brew tap ocd0711/codexstack https://github.com/ocd0711/CodexStack
+brew install --cask codex-stack
+```
+
+The cask removes the downloaded app quarantine attribute after installation:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/codexStack.app
+```
+
+To upgrade from GitHub Releases:
+
+```bash
+brew update
+brew upgrade --cask codex-stack
+```
+
 ## Run Locally
 
 ```bash
