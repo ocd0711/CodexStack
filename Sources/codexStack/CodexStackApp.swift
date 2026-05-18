@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 import SwiftUI
 
 @main
@@ -7,9 +8,11 @@ struct CodexStackApp: App {
     private static let utilizationProgressModeDefaultsKey = "utilizationProgressMode"
     private static let showMenuBarPercentageDefaultsKey = "showMenuBarPercentage"
     private static let refreshIntervalDefaultsKey = "refreshInterval"
+    private static let launchAtLoginDefaultsKey = "launchAtLogin"
     @NSApplicationDelegateAdaptor(CodexStackAppDelegate.self) private var appDelegate
     @StateObject private var store: SessionStore
     @State private var showMenuBarPercentage: Bool
+    @State private var launchAtLogin: Bool
 
     init() {
         let saved = UserDefaults.standard.string(forKey: Self.codexRootPathDefaultsKey)
@@ -19,6 +22,7 @@ struct CodexStackApp: App {
         let showPercentage = UserDefaults.standard.object(forKey: Self.showMenuBarPercentageDefaultsKey) as? Bool ?? true
         let savedRefreshRaw = UserDefaults.standard.object(forKey: Self.refreshIntervalDefaultsKey) as? Int
         let savedRefreshInterval = RefreshInterval(rawValue: savedRefreshRaw ?? 0) ?? .off
+        let launchAtLoginEnabled = LaunchAtLoginController.isEnabled
         _store = StateObject(
             wrappedValue: SessionStore(
                 codexRootPath: saved,
@@ -27,6 +31,7 @@ struct CodexStackApp: App {
             )
         )
         _showMenuBarPercentage = State(initialValue: showPercentage)
+        _launchAtLogin = State(initialValue: launchAtLoginEnabled)
     }
 
     var body: some Scene {
@@ -37,8 +42,9 @@ struct CodexStackApp: App {
                         currentPath: store.codexRootPath,
                         currentProgressMode: store.utilizationProgressMode,
                         showMenuBarPercentage: showMenuBarPercentage,
-                        refreshInterval: store.refreshInterval
-                    ) { newPath, progressMode, showPercentage, refreshInterval in
+                        refreshInterval: store.refreshInterval,
+                        launchAtLogin: launchAtLogin
+                    ) { newPath, progressMode, showPercentage, refreshInterval, launchAtLoginEnabled in
                         let expanded = NSString(string: newPath).expandingTildeInPath
                         UserDefaults.standard.set(expanded, forKey: Self.codexRootPathDefaultsKey)
                         UserDefaults.standard.set(
@@ -47,12 +53,14 @@ struct CodexStackApp: App {
                         )
                         UserDefaults.standard.set(showPercentage, forKey: Self.showMenuBarPercentageDefaultsKey)
                         UserDefaults.standard.set(refreshInterval.rawValue, forKey: Self.refreshIntervalDefaultsKey)
+                        UserDefaults.standard.set(launchAtLoginEnabled, forKey: Self.launchAtLoginDefaultsKey)
                         if expanded != store.codexRootPath {
                             store.updateCodexRootPath(expanded)
                         }
                         store.updateUtilizationProgressMode(progressMode)
                         store.updateRefreshInterval(refreshInterval)
                         showMenuBarPercentage = showPercentage
+                        launchAtLogin = launchAtLoginEnabled
                     }
                 }
             )
@@ -108,6 +116,23 @@ final class CodexStackAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+}
+
+@MainActor
+private enum LaunchAtLoginController {
+    static var isEnabled: Bool {
+        SMAppService.mainApp.status == .enabled
+    }
+
+    static func setEnabled(_ enabled: Bool) throws {
+        if enabled {
+            if SMAppService.mainApp.status != .enabled {
+                try SMAppService.mainApp.register()
+            }
+        } else if SMAppService.mainApp.status == .enabled {
+            try SMAppService.mainApp.unregister()
+        }
     }
 }
 
@@ -1148,7 +1173,8 @@ final class SettingsWindowController: NSWindowController {
         currentProgressMode: UtilizationProgressMode,
         showMenuBarPercentage: Bool,
         refreshInterval: RefreshInterval,
-        onSave: @escaping (String, UtilizationProgressMode, Bool, RefreshInterval) -> Void
+        launchAtLogin: Bool,
+        onSave: @escaping (String, UtilizationProgressMode, Bool, RefreshInterval, Bool) -> Void
     ) {
         DispatchQueue.main.async { [weak self] in
             self?.dismissTransientMenuWindows()
@@ -1158,6 +1184,7 @@ final class SettingsWindowController: NSWindowController {
                     currentProgressMode: currentProgressMode,
                     showMenuBarPercentage: showMenuBarPercentage,
                     refreshInterval: refreshInterval,
+                    launchAtLogin: launchAtLogin,
                     onSave: onSave
                 )
             }
@@ -1178,13 +1205,15 @@ final class SettingsWindowController: NSWindowController {
         currentProgressMode: UtilizationProgressMode,
         showMenuBarPercentage: Bool,
         refreshInterval: RefreshInterval,
-        onSave: @escaping (String, UtilizationProgressMode, Bool, RefreshInterval) -> Void
+        launchAtLogin: Bool,
+        onSave: @escaping (String, UtilizationProgressMode, Bool, RefreshInterval, Bool) -> Void
     ) {
         let settingsView = SettingsWindowView(
             currentPath: currentPath,
             currentProgressMode: currentProgressMode,
             showMenuBarPercentage: showMenuBarPercentage,
             refreshInterval: refreshInterval,
+            launchAtLogin: launchAtLogin,
             onSave: onSave
         )
         let hostingController: NSHostingController<SettingsWindowView>
@@ -1254,21 +1283,24 @@ private struct SettingsWindowView: View {
     @State private var progressMode: UtilizationProgressMode
     @State private var showMenuBarPercentage: Bool
     @State private var refreshInterval: RefreshInterval
+    @State private var launchAtLogin: Bool
     @State private var updateAlert: UpdateAlert?
     @State private var isCheckingUpdates = false
-    let onSave: (String, UtilizationProgressMode, Bool, RefreshInterval) -> Void
+    let onSave: (String, UtilizationProgressMode, Bool, RefreshInterval, Bool) -> Void
 
     init(
         currentPath: String,
         currentProgressMode: UtilizationProgressMode,
         showMenuBarPercentage: Bool,
         refreshInterval: RefreshInterval,
-        onSave: @escaping (String, UtilizationProgressMode, Bool, RefreshInterval) -> Void
+        launchAtLogin: Bool,
+        onSave: @escaping (String, UtilizationProgressMode, Bool, RefreshInterval, Bool) -> Void
     ) {
         _currentPath = State(initialValue: currentPath)
         _progressMode = State(initialValue: currentProgressMode)
         _showMenuBarPercentage = State(initialValue: showMenuBarPercentage)
         _refreshInterval = State(initialValue: refreshInterval)
+        _launchAtLogin = State(initialValue: launchAtLogin)
         self.onSave = onSave
     }
 
@@ -1398,6 +1430,12 @@ private struct SettingsWindowView: View {
                         }
                     }
                 }
+                SettingsDivider()
+                SettingsLine(title: localized("Launch at Login"), subtitle: localized("Open codexStack automatically when you sign in.")) {
+                    SettingsSwitch(isOn: $launchAtLogin) {
+                        updateLaunchAtLogin()
+                    }
+                }
             }
 
             sectionTitle("Menu Bar")
@@ -1521,11 +1559,24 @@ private struct SettingsWindowView: View {
     }
 
     private func savePath() {
-        onSave(currentPath, progressMode, showMenuBarPercentage, refreshInterval)
+        onSave(currentPath, progressMode, showMenuBarPercentage, refreshInterval, launchAtLogin)
     }
 
     private func applyNonPathSettings() {
-        onSave(currentPath, progressMode, showMenuBarPercentage, refreshInterval)
+        onSave(currentPath, progressMode, showMenuBarPercentage, refreshInterval, launchAtLogin)
+    }
+
+    private func updateLaunchAtLogin() {
+        do {
+            try LaunchAtLoginController.setEnabled(launchAtLogin)
+            applyNonPathSettings()
+        } catch {
+            launchAtLogin.toggle()
+            updateAlert = UpdateAlert(
+                title: localized("Unable to Update Login Item"),
+                message: error.localizedDescription
+            )
+        }
     }
 
     private func openRepository() {

@@ -41,6 +41,9 @@
 "Choose" = "Choose";
 "Browse..." = "Browse...";
 "Used for session scan, archive, and index reconciliation." = "Folder where codexStack reads Codex sessions.";
+"Launch at Login" = "Launch at Login";
+"Open codexStack automatically when you sign in." = "Open codexStack automatically when you sign in.";
+"Unable to Update Login Item" = "Unable to Update Login Item";
 "Progress Bar" = "Quota meter";
 "Controls whether usage bars show used or remaining quota." = "Choose whether usage meters show used quota or remaining capacity.";
 "Menu Bar" = "Menu Bar";

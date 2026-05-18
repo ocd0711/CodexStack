@@ -41,6 +41,9 @@
 "Choose" = "选择";
 "Browse..." = "浏览...";
 "Used for session scan, archive, and index reconciliation." = "codexStack 从这个目录读取 Codex 会话。";
+"Launch at Login" = "开机自启";
+"Open codexStack automatically when you sign in." = "登录 macOS 后自动打开 codexStack。";
+"Unable to Update Login Item" = "无法更新登录项";
 "Progress Bar" = "额度显示";
 "Controls whether usage bars show used or remaining quota." = "选择用量条显示已使用额度还是剩余额度。";
 "Menu Bar" = "菜单栏";
