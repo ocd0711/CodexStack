@@ -225,7 +225,7 @@ private struct MenuBarPanel: View {
                 progressMode: store.utilizationProgressMode,
                 activeAccountID: activeAccountID
             )
-            costSummaryCard
+            embeddedCostSection
             projectsSummaryCard
             actionsRow
         }
@@ -387,50 +387,96 @@ private struct MenuBarPanel: View {
         return parts.joined(separator: " · ")
     }
 
-    private var costSummaryCard: some View {
-        Button {
-            activePane = .cost
-        } label: {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Cost")
-                        .font(.headline)
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
+    private var embeddedCostSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // MARK: Hero metrics
+            HStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Today")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.tertiary)
+                        .textCase(.uppercase)
+                        .tracking(0.5)
+                    Text(formatUSD(store.usage.todayCostUSD))
+                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("30d cost")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.tertiary)
+                        .textCase(.uppercase)
+                        .tracking(0.5)
+                    Text(formatUSD(store.usage.last30DaysCostUSD))
+                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
+
+            // MARK: Token stats
+            HStack(spacing: 0) {
+                HStack(spacing: 4) {
+                    Text("30d tokens")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.tertiary)
+                    Text(formatTokens(store.usage.last30DaysTokens))
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .foregroundStyle(.secondary)
                 }
-                HStack {
-                    Text(
-                        String.localizedStringWithFormat(
-                            NSLocalizedString("Today: %@ · %@", bundle: .module, comment: ""),
-                            formatUSD(store.usage.todayCostUSD),
-                            formatTokens(store.usage.todayTokens)
-                        )
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    Spacer()
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                HStack(spacing: 4) {
+                    Text("Latest tokens")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.tertiary)
+                    Text(formatTokens(store.usage.todayTokens))
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.secondary)
                 }
-                HStack {
-                    Text(
-                        String.localizedStringWithFormat(
-                            NSLocalizedString("Last 30 days: %@ · %@", bundle: .module, comment: ""),
-                            formatUSD(store.usage.last30DaysCostUSD),
-                            formatTokens(store.usage.last30DaysTokens)
-                        )
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    Spacer()
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(10)
-            .background(.regularMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .padding(.horizontal, 14)
+            .padding(.bottom, 12)
+
+            Divider().padding(.horizontal, 14)
+
+            // MARK: Chart
+            CostBarsView(
+                dailySeries: store.usage.dailyCostSeries,
+                selectedDayID: nil,
+                barTint: .accentColor,
+                highlightMaxDay: true,
+                onHoverDay: { _ in }
+            )
+            .padding(.horizontal, 10)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+
+            // MARK: Footer
+            HStack(spacing: 4) {
+                let topModel = findTopModel(in: store.usage)
+                Text("Top model:")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                Text(topModel)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("Estimated from local logs")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.quaternary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 10)
         }
-        .buttonStyle(.plain)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .popover(isPresented: isCostPopoverPresented, attachmentAnchor: .rect(.bounds), arrowEdge: .trailing) {
             costDetailPane
                 .frame(width: costPopoverWidth)
@@ -452,6 +498,16 @@ private struct MenuBarPanel: View {
                 scheduleClosePaneIfNeeded()
             }
         }
+    }
+
+    private func findTopModel(in usage: UsageSnapshot) -> String {
+        var counts: [String: Int64] = [:]
+        for day in usage.dailyCostSeries {
+            for breakdown in day.modelBreakdowns {
+                counts[breakdown.modelName, default: 0] += breakdown.tokens
+            }
+        }
+        return counts.max(by: { $0.value < $1.value })?.key ?? "gpt-5.5"
     }
 
     private var projectsSummaryCard: some View {
@@ -522,70 +578,88 @@ private struct MenuBarPanel: View {
     }
 
     private var costDetailPane: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Cost")
-                    .font(.headline)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Daily Breakdown")
+                    .font(.system(size: 13, weight: .semibold))
                 Spacer()
                 Text(
                     String.localizedStringWithFormat(
-                        NSLocalizedString("Est. total (30d): %@", bundle: .module, comment: ""),
+                        NSLocalizedString("30d total: %@", bundle: .module, comment: ""),
                         formatUSD(store.usage.last30DaysCostUSD)
                     )
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .truncationMode(.middle)
             }
 
             CostBarsView(
                 dailySeries: store.usage.dailyCostSeries,
                 selectedDayID: selectedCostDay?.id,
+                barTint: Color(nsColor: NSColor.controlAccentColor.withSystemEffect(.deepPressed)),
+                highlightMaxDay: false,
                 onHoverDay: { day in
                     hoveredCostDayID = day?.timeIntervalSince1970
                 }
             )
 
             if let selectedCostDay {
-                HStack {
-                    Text(selectedCostDay.dayStart.formatted(date: .abbreviated, time: .omitted))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Text("\(formatUSD(selectedCostDay.costUSD)) · \(formatTokens(selectedCostDay.tokens)) tokens")
-                        .font(.caption)
-                }
-                if selectedCostDay.modelBreakdowns.isEmpty {
-                    Text(NSLocalizedString("No per-model breakdown", bundle: .module, comment: ""))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .frame(height: 24, alignment: .leading)
-                } else {
-                    let visibleRows = Array(selectedCostDay.modelBreakdowns.prefix(3))
-                    ForEach(visibleRows) { item in
-                        HStack(spacing: 8) {
-                            Rectangle()
-                                .fill(Color.teal.opacity(0.65))
-                                .frame(width: 2, height: 20)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(item.modelName)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .truncationMode(.tail)
-                                Text("\(formatUSD(item.costUSD)) · \(formatTokens(item.tokens))")
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(selectedCostDay.dayStart.formatted(date: .abbreviated, time: .omitted))
+                            .font(.system(size: 12, weight: .semibold))
+                        Spacer()
+                        Text("\(formatUSD(selectedCostDay.costUSD)) · \(formatTokens(selectedCostDay.tokens)) tokens")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    
+                    if selectedCostDay.modelBreakdowns.isEmpty {
+                        Text(NSLocalizedString("No per-model breakdown", bundle: .module, comment: ""))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .frame(height: 20, alignment: .leading)
+                    } else {
+                        let visibleRows = Array(selectedCostDay.modelBreakdowns.prefix(5))
+                        ForEach(visibleRows) { item in
+                            HStack(spacing: 10) {
+                                RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                                    .fill(Color(nsColor: .controlAccentColor).opacity(0.7))
+                                    .frame(width: 3, height: 26)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(item.modelName)
+                                        .font(.system(size: 11, weight: .medium))
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                    Text("\(formatUSD(item.costUSD)) · \(formatTokens(item.tokens)) tokens")
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
                             }
-                            Spacer()
                         }
-                        .frame(height: 24, alignment: .leading)
                     }
                 }
+                .padding(10)
+                .background {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.primary.opacity(0.04))
+                }
+            } else {
+                HStack {
+                    Image(systemName: "hand.point.up.left")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                    Text("Hover a bar to see details")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, 6)
             }
         }
-        .padding(12)
+        .padding(14)
         .fixedSize(horizontal: false, vertical: true)
     }
 
@@ -852,11 +926,17 @@ private struct MenuBarPanel: View {
     }
 
     private func formatTokens(_ value: Int64) -> String {
+        if value >= 1_000_000_000 {
+            let formatted = String(format: "%.1fB", Double(value) / 1_000_000_000)
+            return formatted.replacingOccurrences(of: ".0B", with: "B")
+        }
         if value >= 1_000_000 {
-            return String(format: "%.1fM", Double(value) / 1_000_000)
+            let formatted = String(format: "%.1fM", Double(value) / 1_000_000)
+            return formatted.replacingOccurrences(of: ".0M", with: "M")
         }
         if value >= 1_000 {
-            return String(format: "%.1fK", Double(value) / 1_000)
+            let formatted = String(format: "%.1fK", Double(value) / 1_000)
+            return formatted.replacingOccurrences(of: ".0K", with: "K")
         }
         return "\(value)"
     }
@@ -953,6 +1033,8 @@ private struct MenuBarPanel: View {
 private struct CostBarsView: View {
     let dailySeries: [UsageDailyCost]
     var selectedDayID: TimeInterval? = nil
+    var barTint: Color = Color(nsColor: .controlAccentColor)
+    var highlightMaxDay: Bool = false
     var onHoverDay: ((Date?) -> Void)? = nil
     private let chartHeight: CGFloat = 88
     private let maxBarHeight: CGFloat = 58
@@ -973,6 +1055,11 @@ private struct CostBarsView: View {
         displaySeries.map(\.costUSD).max() ?? 0
     }
 
+    private var maxDayID: TimeInterval? {
+        guard highlightMaxDay, maxCost > 0 else { return nil }
+        return displaySeries.first(where: { $0.costUSD == maxCost })?.id
+    }
+
     var body: some View {
         GeometryReader { geometry in
             let width = max(1, geometry.size.width)
@@ -985,12 +1072,16 @@ private struct CostBarsView: View {
                     ForEach(Array(displaySeries.enumerated()), id: \.element.id) { _, point in
                         VStack(spacing: 4) {
                             let height = barHeight(for: point.costUSD)
+                            let isMax = point.id == maxDayID
+                            let isSelected = point.id == selectedDayID
                             ZStack(alignment: .bottom) {
                                 RoundedRectangle(cornerRadius: 3, style: .continuous)
                                     .fill(
-                                        point.id == selectedDayID
-                                            ? Color(nsColor: .controlAccentColor)
-                                            : Color(nsColor: .controlAccentColor).opacity(0.72)
+                                        isSelected
+                                            ? barTint
+                                            : isMax
+                                                ? barTint
+                                                : barTint.opacity(0.55)
                                     )
                                     .frame(width: barWidth, height: height)
                                 if Calendar.current.isDateInToday(point.dayStart) {
@@ -1002,7 +1093,7 @@ private struct CostBarsView: View {
                             }
                             .frame(width: slotWidth, height: maxBarHeight, alignment: .bottom)
                             .background(alignment: .bottom) {
-                                if point.id == selectedDayID {
+                                if isSelected {
                                     Capsule(style: .continuous)
                                         .fill(Color.primary.opacity(0.08))
                                         .frame(width: barWidth + 10, height: 4)
@@ -1011,7 +1102,7 @@ private struct CostBarsView: View {
                             }
                             Text(dayLabel(point.dayStart))
                                 .font(.caption2)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(isMax && highlightMaxDay ? .primary : .secondary)
                                 .lineLimit(1)
                                 .frame(width: slotWidth)
                         }
