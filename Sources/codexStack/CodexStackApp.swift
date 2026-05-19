@@ -24,7 +24,6 @@ struct CodexStackApp: App {
         let savedRefreshInterval = RefreshInterval(rawValue: savedRefreshRaw ?? 0) ?? .off
         let launchAtLoginEnabled = LaunchAtLoginController.isEnabled
         let preferredAccountID = UserDefaults.standard.string(forKey: SessionStore.preferredAccountIDDefaultsKey)
-        let celebrateSession = (UserDefaults.standard.object(forKey: SessionStore.celebrateSessionResetDefaultsKey) as? Bool) ?? true
         let celebrateWeekly = (UserDefaults.standard.object(forKey: SessionStore.celebrateWeeklyResetDefaultsKey) as? Bool) ?? true
         let autoSwitchEnabled = UserDefaults.standard.object(forKey: SessionStore.autoSwitchEnabledDefaultsKey) as? Bool ?? false
         let autoSwitchSessionThreshold = UserDefaults.standard.object(forKey: SessionStore.autoSwitchSessionThresholdDefaultsKey) as? Double ?? 90.0
@@ -39,7 +38,6 @@ struct CodexStackApp: App {
             autoSwitchSessionThreshold: autoSwitchSessionThreshold,
             autoSwitchWeeklyThreshold: autoSwitchWeeklyThreshold,
             autoSwitchNotificationEnabled: autoSwitchNotificationEnabled,
-            celebrateSessionReset: celebrateSession,
             celebrateWeeklyReset: celebrateWeekly
         )
         store.onResetCelebration = { kind in
@@ -61,7 +59,6 @@ struct CodexStackApp: App {
                         showMenuBarPercentage: showMenuBarPercentage,
                         refreshInterval: store.refreshInterval,
                         launchAtLogin: launchAtLogin,
-                        celebrateSessionReset: store.celebrateSessionReset,
                         celebrateWeeklyReset: store.celebrateWeeklyReset,
                         autoSwitchEnabled: store.autoSwitchEnabled,
                         autoSwitchSessionThreshold: store.autoSwitchSessionThreshold,
@@ -85,8 +82,7 @@ struct CodexStackApp: App {
                         showMenuBarPercentage = showPercentage
                         launchAtLogin = launchAtLoginEnabled
                         },
-                        onCelebrationChanged: { sessionOn, weeklyOn in
-                            store.setCelebrateSessionReset(sessionOn)
+                        onCelebrationChanged: { weeklyOn in
                             store.setCelebrateWeeklyReset(weeklyOn)
                         },
                         onAccountsChanged: {
@@ -248,7 +244,6 @@ private struct MenuBarPanel: View {
         }
         .padding(12)
         .frame(minWidth: 360, idealWidth: 390, maxWidth: 420)
-        .background(.regularMaterial)
         .animation(.easeInOut(duration: 0.12), value: activePane)
         .onDisappear {
             cancelClosePaneTask()
@@ -1641,14 +1636,13 @@ final class SettingsWindowController: NSWindowController {
         showMenuBarPercentage: Bool,
         refreshInterval: RefreshInterval,
         launchAtLogin: Bool,
-        celebrateSessionReset: Bool,
         celebrateWeeklyReset: Bool,
         autoSwitchEnabled: Bool,
         autoSwitchSessionThreshold: Double,
         autoSwitchWeeklyThreshold: Double,
         autoSwitchNotificationEnabled: Bool,
         onSave: @escaping (String, UtilizationProgressMode, Bool, RefreshInterval, Bool) -> Void,
-        onCelebrationChanged: @escaping (Bool, Bool) -> Void = { _, _ in },
+        onCelebrationChanged: @escaping (Bool) -> Void = { _ in },
         onAccountsChanged: @escaping () -> Void = {},
         onAutoSwitchChanged: @escaping (Bool, Double, Double, Bool) -> Void = { _, _, _, _ in }
     ) {
@@ -1661,7 +1655,6 @@ final class SettingsWindowController: NSWindowController {
                     showMenuBarPercentage: showMenuBarPercentage,
                     refreshInterval: refreshInterval,
                     launchAtLogin: launchAtLogin,
-                    celebrateSessionReset: celebrateSessionReset,
                     celebrateWeeklyReset: celebrateWeeklyReset,
                     autoSwitchEnabled: autoSwitchEnabled,
                     autoSwitchSessionThreshold: autoSwitchSessionThreshold,
@@ -1691,14 +1684,13 @@ final class SettingsWindowController: NSWindowController {
         showMenuBarPercentage: Bool,
         refreshInterval: RefreshInterval,
         launchAtLogin: Bool,
-        celebrateSessionReset: Bool,
         celebrateWeeklyReset: Bool,
         autoSwitchEnabled: Bool,
         autoSwitchSessionThreshold: Double,
         autoSwitchWeeklyThreshold: Double,
         autoSwitchNotificationEnabled: Bool,
         onSave: @escaping (String, UtilizationProgressMode, Bool, RefreshInterval, Bool) -> Void,
-        onCelebrationChanged: @escaping (Bool, Bool) -> Void,
+        onCelebrationChanged: @escaping (Bool) -> Void,
         onAccountsChanged: @escaping () -> Void,
         onAutoSwitchChanged: @escaping (Bool, Double, Double, Bool) -> Void
     ) {
@@ -1708,7 +1700,6 @@ final class SettingsWindowController: NSWindowController {
             showMenuBarPercentage: showMenuBarPercentage,
             refreshInterval: refreshInterval,
             launchAtLogin: launchAtLogin,
-            celebrateSessionReset: celebrateSessionReset,
             celebrateWeeklyReset: celebrateWeeklyReset,
             autoSwitchEnabled: autoSwitchEnabled,
             autoSwitchSessionThreshold: autoSwitchSessionThreshold,
@@ -1803,7 +1794,6 @@ private struct SettingsWindowView: View {
     @State private var isCheckingUpdates = false
     @State private var importedAccounts: [ImportedCodexAccountSummary] = AccountCredentialStore.loadSummaries()
     @State private var accountAlert: UpdateAlert?
-    @State private var celebrateSessionReset: Bool
     @State private var celebrateWeeklyReset: Bool
     @State private var autoSwitchEnabled: Bool
     @State private var autoSwitchSessionThreshold: Double
@@ -1813,7 +1803,7 @@ private struct SettingsWindowView: View {
     @AppStorage("accountsManualOrder") private var accountsManualOrderRaw: String = ""
     @AppStorage("accountsPinActive") private var accountsPinActive: Bool = false
     let onSave: (String, UtilizationProgressMode, Bool, RefreshInterval, Bool) -> Void
-    let onCelebrationChanged: (Bool, Bool) -> Void
+    let onCelebrationChanged: (Bool) -> Void
     let onAccountsChanged: () -> Void
     let onAutoSwitchChanged: (Bool, Double, Double, Bool) -> Void
 
@@ -1843,14 +1833,13 @@ private struct SettingsWindowView: View {
         showMenuBarPercentage: Bool,
         refreshInterval: RefreshInterval,
         launchAtLogin: Bool,
-        celebrateSessionReset: Bool = true,
         celebrateWeeklyReset: Bool = true,
         autoSwitchEnabled: Bool = false,
         autoSwitchSessionThreshold: Double = 90.0,
         autoSwitchWeeklyThreshold: Double = 90.0,
         autoSwitchNotificationEnabled: Bool = true,
         onSave: @escaping (String, UtilizationProgressMode, Bool, RefreshInterval, Bool) -> Void,
-        onCelebrationChanged: @escaping (Bool, Bool) -> Void = { _, _ in },
+        onCelebrationChanged: @escaping (Bool) -> Void = { _ in },
         onAccountsChanged: @escaping () -> Void = {},
         onAutoSwitchChanged: @escaping (Bool, Double, Double, Bool) -> Void = { _, _, _, _ in }
     ) {
@@ -1859,7 +1848,6 @@ private struct SettingsWindowView: View {
         _showMenuBarPercentage = State(initialValue: showMenuBarPercentage)
         _refreshInterval = State(initialValue: refreshInterval)
         _launchAtLogin = State(initialValue: launchAtLogin)
-        _celebrateSessionReset = State(initialValue: celebrateSessionReset)
         _celebrateWeeklyReset = State(initialValue: celebrateWeeklyReset)
         _autoSwitchEnabled = State(initialValue: autoSwitchEnabled)
         _autoSwitchSessionThreshold = State(initialValue: autoSwitchSessionThreshold)
@@ -2071,21 +2059,13 @@ private struct SettingsWindowView: View {
 
             sectionTitle("Celebrations")
             settingsCard {
-                SettingsLine(
-                    title: localized("5h Window Reset"),
-                    subtitle: localized("Play a full-screen confetti animation when the session window resets.")
-                ) {
-                    SettingsSwitch(isOn: $celebrateSessionReset) {
-                        onCelebrationChanged(celebrateSessionReset, celebrateWeeklyReset)
-                    }
-                }
-                SettingsDivider()
+
                 SettingsLine(
                     title: localized("Weekly Reset"),
                     subtitle: localized("Play a full-screen confetti animation when the weekly quota resets.")
                 ) {
                     SettingsSwitch(isOn: $celebrateWeeklyReset) {
-                        onCelebrationChanged(celebrateSessionReset, celebrateWeeklyReset)
+                        onCelebrationChanged(celebrateWeeklyReset)
                     }
                 }
                 SettingsDivider()
@@ -2094,10 +2074,7 @@ private struct SettingsWindowView: View {
                     subtitle: localized("Test the animation on the active screen.")
                 ) {
                     HStack(spacing: 8) {
-                        Button(localized("5h")) {
-                            ResetCelebrationController.shared.present(kind: .session)
-                        }
-                        Button(localized("Weekly")) {
+                        Button(localized("Test Animation")) {
                             ResetCelebrationController.shared.present(kind: .weekly)
                         }
                     }

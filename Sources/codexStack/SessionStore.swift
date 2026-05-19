@@ -28,14 +28,12 @@ final class SessionStore: ObservableObject {
     @Published var autoSwitchSessionThreshold: Double
     @Published var autoSwitchWeeklyThreshold: Double
     @Published var autoSwitchNotificationEnabled: Bool
-    @Published var celebrateSessionReset: Bool
     @Published var celebrateWeeklyReset: Bool
     static let preferredAccountIDDefaultsKey = "preferredAccountID"
     static let autoSwitchEnabledDefaultsKey = "autoSwitchEnabled"
     static let autoSwitchSessionThresholdDefaultsKey = "autoSwitchSessionThreshold"
     static let autoSwitchWeeklyThresholdDefaultsKey = "autoSwitchWeeklyThreshold"
     static let autoSwitchNotificationEnabledDefaultsKey = "autoSwitchNotificationEnabled"
-    static let celebrateSessionResetDefaultsKey = "celebrateSessionReset"
     static let celebrateWeeklyResetDefaultsKey = "celebrateWeeklyReset"
     private static let lastSessionResetSeenKey = "lastSessionResetSeen"
     private static let lastWeeklyResetSeenKey = "lastWeeklyResetSeen"
@@ -62,7 +60,6 @@ final class SessionStore: ObservableObject {
         autoSwitchSessionThreshold: Double = 90.0,
         autoSwitchWeeklyThreshold: Double = 90.0,
         autoSwitchNotificationEnabled: Bool = true,
-        celebrateSessionReset: Bool = true,
         celebrateWeeklyReset: Bool = true
     ) {
         self.codexRootPath = codexRootPath
@@ -73,7 +70,6 @@ final class SessionStore: ObservableObject {
         self.autoSwitchSessionThreshold = autoSwitchSessionThreshold
         self.autoSwitchWeeklyThreshold = autoSwitchWeeklyThreshold
         self.autoSwitchNotificationEnabled = autoSwitchNotificationEnabled
-        self.celebrateSessionReset = celebrateSessionReset
         self.celebrateWeeklyReset = celebrateWeeklyReset
         refresh()
         scheduleAutoRefresh()
@@ -83,7 +79,9 @@ final class SessionStore: ObservableObject {
         }
         
         NotificationCenter.default.addObserver(forName: .pricingUpdated, object: nil, queue: .main) { [weak self] _ in
-            self?.refresh()
+            Task { @MainActor in
+                self?.refresh()
+            }
         }
     }
 
@@ -327,12 +325,6 @@ final class SessionStore: ObservableObject {
         scheduleAutoRefresh()
     }
 
-    func setCelebrateSessionReset(_ newValue: Bool) {
-        guard celebrateSessionReset != newValue else { return }
-        celebrateSessionReset = newValue
-        UserDefaults.standard.set(newValue, forKey: SessionStore.celebrateSessionResetDefaultsKey)
-    }
-
     func setCelebrateWeeklyReset(_ newValue: Bool) {
         guard celebrateWeeklyReset != newValue else { return }
         celebrateWeeklyReset = newValue
@@ -342,21 +334,9 @@ final class SessionStore: ObservableObject {
     private func detectResetCelebrations(in newUsage: UsageSnapshot) {
         let defaults = UserDefaults.standard
         let accountPrefix = newUsage.accountEmail ?? "default"
-        let sessionKey = "\(SessionStore.lastSessionResetSeenKey)_\(accountPrefix)"
         let weeklyKey = "\(SessionStore.lastWeeklyResetSeenKey)_\(accountPrefix)"
 
-        var triggeredSession = false
         var triggeredWeekly = false
-
-        if let newReset = newUsage.sessionResetAt {
-            let lastSeen = defaults.object(forKey: sessionKey) as? Date
-            if lastSeen == nil || newReset > lastSeen! {
-                if let last = lastSeen, newReset.timeIntervalSince(last) > 3600, celebrateSessionReset {
-                    triggeredSession = true
-                }
-                defaults.set(newReset, forKey: sessionKey)
-            }
-        }
 
         if let newReset = newUsage.weeklyResetAt {
             let lastSeen = defaults.object(forKey: weeklyKey) as? Date
@@ -370,8 +350,6 @@ final class SessionStore: ObservableObject {
 
         if triggeredWeekly {
             onResetCelebration?(.weekly)
-        } else if triggeredSession {
-            onResetCelebration?(.session)
         }
     }
 

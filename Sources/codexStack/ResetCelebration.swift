@@ -3,39 +3,22 @@ import SwiftUI
 import QuartzCore
 
 enum ResetCelebrationKind: Sendable {
-    case session
     case weekly
 
     var title: String {
-        switch self {
-        case .session:
-            return NSLocalizedString("5h Window Reset!", bundle: .module, comment: "")
-        case .weekly:
-            return NSLocalizedString("Weekly Quota Reset!", bundle: .module, comment: "")
-        }
+        return NSLocalizedString("Weekly Quota Reset!", bundle: .module, comment: "")
     }
 
     var subtitle: String {
-        switch self {
-        case .session:
-            return NSLocalizedString("Fresh quota — back to full speed.", bundle: .module, comment: "")
-        case .weekly:
-            return NSLocalizedString("A whole new week of Codex.", bundle: .module, comment: "")
-        }
+        return NSLocalizedString("A whole new week of Codex.", bundle: .module, comment: "")
     }
 
     var emoji: String {
-        switch self {
-        case .session: return "🎉"
-        case .weekly: return "🎊"
-        }
+        return "🎊"
     }
 
     var accent: Color {
-        switch self {
-        case .session: return Color(nsColor: .systemTeal)
-        case .weekly: return Color(nsColor: .systemPurple)
-        }
+        return Color(nsColor: .systemPurple)
     }
 }
 
