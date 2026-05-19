@@ -4,22 +4,46 @@
 
 codexStack is a native macOS menu bar app for managing local Codex sessions.
 
-## What It Does
+## Features
+
+### Session Management
 
 - Groups sessions by project with collapsible hierarchy
-- Supports Active/Archived scopes and text search
+- Supports Active / Archived scopes and full-text search
 - Shows session metadata in a dedicated manager pane
-- Opens conversation preview in a separate modal
-- Supports whole-project removal by moving project sessions to Trash
+- Opens conversation preview in a separate modal sheet
 - Archives, unarchives, renames, and moves sessions to Trash
+- Supports whole-project removal by moving all project sessions to Trash
 - Reconciles `session_index.jsonl` after mutations
 - Reads Codex session titles from `state_5.sqlite`
-- Shows session/weekly subscription utilization
-- Shows cost estimation for today and last 30 days
-- Manage multiple Codex accounts (import, reorder, remove, and export to Codex or cliproxyapi JSON formats)
-- Configurable Auto-Switch feature: automatically switches to the account with the lowest usage when the current account hits customizable Session (e.g. 5h) or Weekly usage percentage limits, with optional macOS notifications
-- Two-way account sync: manual or automatic syncing to `~/.codex/auth.json` to seamlessly swap active accounts
-- Provides a menu bar Settings window for display options and Codex root directory
+
+### Usage & Cost Monitoring
+
+- Shows session (5h) and weekly subscription utilization with progress bars
+- Cost estimation for today and last 30 days, broken down by model
+- Menu bar icon reflects real-time utilization at a glance
+
+### Account Orchestration
+
+- Import and manage multiple Codex accounts (supports both official and cliproxyapi OAuth JSON)
+- Reorder, pin, remove, and export accounts
+- Two-way account sync: manual or automatic syncing to `~/.codex/auth.json`
+- Auto-Switch: automatically migrates to the account with the lowest usage when the current account exceeds configurable Session or Weekly percentage thresholds, with optional macOS notifications
+- Expired credential detection: auto-switch skips expired accounts and hides stale usage percentages
+
+### Model Provider Management
+
+- Reads all `[model_providers.*]` sections from `~/.codex/config.toml` automatically
+- **Provider Mode** submenu lets you switch between Official Login and any custom provider with one click
+- Active provider is shown as a badge in the menu bar panel header
+- Auto-Switch is automatically disabled and greyed out when a custom provider is active, with a visible warning banner
+- Session metadata is synced after every provider switch to keep history consistent
+
+### Settings
+
+- Configurable Codex root directory, display mode, and refresh interval
+- Launch at login toggle
+- Session and weekly reset celebration animations (confetti 🎉)
 
 ## Data Sources
 
@@ -27,29 +51,31 @@ codexStack is a native macOS menu bar app for managing local Codex sessions.
 - `~/.codex/sessions`
 - `~/.codex/archived_sessions`
 - `~/.codex/session_index.jsonl`
+- `~/.codex/config.toml`
+- `~/.codex/auth.json`
 
-Default root path is `~/.codex`, configurable in `Settings...` from the menu bar.
+Default root path is `~/.codex`, configurable in Settings.
 
 ## Install
 
-Homebrew Cask installation is supported from this repository tap:
+Homebrew Cask installation via a dedicated tap:
 
 ```bash
-brew tap ocd0711/codexstack https://github.com/ocd0711/CodexStack
-brew install --cask codex-stack
+brew tap ocd0711/tap
+brew install --cask ocd0711/tap/codex-stack
 ```
 
-The cask removes the downloaded app quarantine attribute after installation:
-
-```bash
-xattr -dr com.apple.quarantine /Applications/codexStack.app
-```
-
-To upgrade from GitHub Releases:
+To upgrade:
 
 ```bash
 brew update
 brew upgrade --cask codex-stack
+```
+
+To uninstall (including user data):
+
+```bash
+brew uninstall --cask --zap codex-stack
 ```
 
 ## Run Locally
