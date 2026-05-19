@@ -14,7 +14,16 @@ class ModelPricingSyncService {
     static let shared = ModelPricingSyncService()
 
     private let cacheURL: URL
-    private(set) var syncedPrices: [String: CodexModelPricing] = [:]
+    private let lock = NSLock()
+    private var _syncedPrices: [String: CodexModelPricing] = [:]
+    
+    var syncedPrices: [String: CodexModelPricing] {
+        lock.lock()
+        defer { lock.unlock() }
+        return _syncedPrices
+    }
+    
+    private var isSyncing = false
 
     private var checkTask: Task<Void, Never>?
 
@@ -44,7 +53,9 @@ class ModelPricingSyncService {
               let dict = try? JSONDecoder().decode([String: CodexModelPricing].self, from: data) else {
             return
         }
-        self.syncedPrices = dict
+        lock.lock()
+        _syncedPrices = dict
+        lock.unlock()
     }
 
     func syncIfNeeded() {
@@ -61,6 +72,20 @@ class ModelPricingSyncService {
     }
 
     func syncPrices() async {
+        lock.lock()
+        if isSyncing {
+            lock.unlock()
+            return
+        }
+        isSyncing = true
+        lock.unlock()
+        
+        defer {
+            lock.lock()
+            isSyncing = false
+            lock.unlock()
+        }
+        
         guard let url = URL(string: "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json") else { return }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
@@ -84,8 +109,11 @@ class ModelPricingSyncService {
             }
             
             if !newPrices.isEmpty {
+                self.lock.lock()
+                self._syncedPrices = newPrices
+                self.lock.unlock()
+                
                 DispatchQueue.main.async {
-                    self.syncedPrices = newPrices
                     if let encoded = try? JSONEncoder().encode(newPrices) {
                         try? encoded.write(to: self.cacheURL)
                     }
