@@ -51,9 +51,9 @@ jobs:
           TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
+          export VERSION="${GITHUB_REF_NAME#v}"
           ZIP_PATH="dist/codexStack-${GITHUB_REF_NAME}-macos.zip"
-          SHA256="$(shasum -a 256 "${ZIP_PATH}" | awk '{print $1}')"
+          export SHA256="$(shasum -a 256 "${ZIP_PATH}" | awk '{print $1}')"
 
           git clone "https://x-access-token:${TAP_TOKEN}@github.com/ocd0711/homebrew-tap.git" _tap
           cd _tap
