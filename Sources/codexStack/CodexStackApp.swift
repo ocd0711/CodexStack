@@ -48,6 +48,7 @@ struct CodexStackApp: App {
         _store = StateObject(wrappedValue: store)
         _showMenuBarPercentage = State(initialValue: showPercentage)
         _launchAtLogin = State(initialValue: launchAtLoginEnabled)
+        ModelPricingSyncService.shared.syncIfNeeded()
     }
 
     var body: some Scene {
@@ -175,6 +176,22 @@ private enum LaunchAtLoginController {
             }
         } else if SMAppService.mainApp.status == .enabled {
             try SMAppService.mainApp.unregister()
+        }
+    }
+}
+
+private enum PricingSyncInterval: Int, CaseIterable, Identifiable {
+    case never = 0
+    case daily = 86400
+    case weekly = 604800
+
+    var id: Int { rawValue }
+
+    var label: String {
+        switch self {
+        case .never: return "Never"
+        case .daily: return "Daily"
+        case .weekly: return "Weekly"
         }
     }
 }
@@ -790,6 +807,12 @@ private struct MenuBarPanel: View {
             }
             Button("Refresh") {
                 store.refresh()
+            }
+            .disabled(store.isBusy)
+            Button("Sync Prices") {
+                Task {
+                    await ModelPricingSyncService.shared.syncPrices()
+                }
             }
             .disabled(store.isBusy)
             Button("Settings...") {
@@ -1775,6 +1798,7 @@ private struct SettingsWindowView: View {
     @State private var showMenuBarPercentage: Bool
     @State private var refreshInterval: RefreshInterval
     @State private var launchAtLogin: Bool
+    @AppStorage("pricingSyncInterval") private var pricingSyncInterval: PricingSyncInterval = .weekly
     @State private var updateAlert: UpdateAlert?
     @State private var isCheckingUpdates = false
     @State private var importedAccounts: [ImportedCodexAccountSummary] = AccountCredentialStore.loadSummaries()
@@ -2020,6 +2044,28 @@ private struct SettingsWindowView: View {
                     }
                     .frame(width: 180)
                     .onChange(of: refreshInterval) { _ in applyNonPathSettings() }
+                }
+                SettingsDivider()
+                SettingsLine(title: localized("Sync Model Prices"), subtitle: localized("Automatically download latest model prices from LiteLLM (BerriAI).")) {
+                    HStack(spacing: 8) {
+                        Picker("", selection: $pricingSyncInterval) {
+                            ForEach(PricingSyncInterval.allCases) { interval in
+                                Text(localized(interval.label)).tag(interval)
+                            }
+                        }
+                        .frame(width: 110)
+                        .onChange(of: pricingSyncInterval) { newValue in
+                            if newValue != .never {
+                                ModelPricingSyncService.shared.syncIfNeeded()
+                            }
+                        }
+                        
+                        Button(localized("Sync Now")) {
+                            Task {
+                                await ModelPricingSyncService.shared.syncPrices()
+                            }
+                        }
+                    }
                 }
             }
 

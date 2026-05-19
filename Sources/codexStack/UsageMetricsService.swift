@@ -8,7 +8,7 @@ struct UsageMetricsService {
         return formatter
     }()
 
-    private let pricingByModel: [String: CodexModelPricing] = [
+    private static let fallbackPricingByModel: [String: CodexModelPricing] = [
         "gpt-5": .init(inputPerToken: 1.25e-6, cachedInputPerToken: 1.25e-7, outputPerToken: 1e-5),
         "gpt-5-codex": .init(inputPerToken: 1.25e-6, cachedInputPerToken: 1.25e-7, outputPerToken: 1e-5),
         "gpt-5-mini": .init(inputPerToken: 2.5e-7, cachedInputPerToken: 2.5e-8, outputPerToken: 2e-6),
@@ -45,6 +45,12 @@ struct UsageMetricsService {
         ),
         "gpt-5.5-pro": .init(inputPerToken: 3e-5, cachedInputPerToken: 3e-5, outputPerToken: 1.8e-4)
     ]
+    
+    private let pricingByModel: [String: CodexModelPricing]
+    
+    init() {
+        self.pricingByModel = Self.fallbackPricingByModel.merging(ModelPricingSyncService.shared.syncedPrices) { (_, new) in new }
+    }
 
     func loadUsageSnapshot(codexRoot: URL, preferredAccountID: String? = nil) -> UsageSnapshot {
         let liveProfiles = loadAccountUsageProfiles(codexRoot: codexRoot)
@@ -843,7 +849,7 @@ struct UsageMetricsService {
     }
 }
 
-private struct CodexModelPricing {
+struct CodexModelPricing: Codable {
     let inputPerToken: Double
     let cachedInputPerToken: Double
     let outputPerToken: Double

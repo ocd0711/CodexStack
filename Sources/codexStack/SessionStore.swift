@@ -81,6 +81,10 @@ final class SessionStore: ObservableObject {
         if Bundle.main.bundleIdentifier != nil {
             UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         }
+        
+        NotificationCenter.default.addObserver(forName: .pricingUpdated, object: nil, queue: .main) { [weak self] _ in
+            self?.refresh()
+        }
     }
 
     deinit {
