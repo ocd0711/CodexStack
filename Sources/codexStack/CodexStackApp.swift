@@ -121,9 +121,10 @@ struct CodexStackApp: App {
     }
 
     private var statusBarIcon: NSImage {
-        StatusIconRenderer.makeIcon(
-            sessionUsedRatio: store.usage.sessionUsedRatio,
-            weeklyUsedRatio: store.usage.weeklyUsedRatio,
+        let activeAccount = store.usage.accounts.first
+        return StatusIconRenderer.makeIcon(
+            sessionUsedRatio: activeAccount?.sessionUsedRatio ?? store.usage.sessionUsedRatio,
+            weeklyUsedRatio: activeAccount?.weeklyUsedRatio ?? store.usage.weeklyUsedRatio,
             progressMode: store.utilizationProgressMode
         )
     }
@@ -137,7 +138,9 @@ struct CodexStackApp: App {
     }
 
     private var menuBarPercent: Int? {
-        let ratio = store.usage.weeklyUsedRatio ?? store.usage.sessionUsedRatio
+        let activeAccount = store.usage.accounts.first
+        let ratio = activeAccount?.weeklyUsedRatio ?? activeAccount?.sessionUsedRatio
+            ?? store.usage.weeklyUsedRatio ?? store.usage.sessionUsedRatio
         guard let ratio else { return nil }
         let clamped = min(1, max(0, ratio))
         let value = store.utilizationProgressMode == .used ? clamped : (1 - clamped)

@@ -10,8 +10,8 @@ enum StatusIconRenderer {
         progressMode: UtilizationProgressMode
     ) -> NSImage {
         renderImage {
-            let primary = displayPercent(from: weeklyUsedRatio ?? sessionUsedRatio, progressMode: progressMode)
-            let secondary = weeklyUsedRatio == nil ? nil : displayPercent(from: sessionUsedRatio, progressMode: progressMode)
+            let sessionPercent = displayPercent(from: sessionUsedRatio, progressMode: progressMode)
+            let weeklyPercent = weeklyUsedRatio == nil ? nil : displayPercent(from: weeklyUsedRatio, progressMode: progressMode)
 
             let barWidth = 30
             let barX = 3
@@ -19,11 +19,11 @@ enum StatusIconRenderer {
             let bottom = PixelRect(x: barX, y: 5, width: barWidth, height: 8)
             let single = PixelRect(x: barX, y: 10, width: barWidth, height: 16)
 
-            if let secondary {
-                drawCapsule(top, percent: primary, face: true, alpha: 1)
-                drawCapsule(bottom, percent: secondary, face: false, alpha: 0.92)
+            if let weeklyPercent {
+                drawCapsule(top, percent: sessionPercent, face: true, alpha: 1)
+                drawCapsule(bottom, percent: weeklyPercent, face: false, alpha: 0.92)
             } else {
-                drawCapsule(single, percent: primary, face: true, alpha: 1)
+                drawCapsule(single, percent: sessionPercent, face: true, alpha: 1)
             }
         }
     }
