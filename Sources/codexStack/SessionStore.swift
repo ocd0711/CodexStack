@@ -35,7 +35,6 @@ final class SessionStore: ObservableObject {
     static let autoSwitchWeeklyThresholdDefaultsKey = "autoSwitchWeeklyThreshold"
     static let autoSwitchNotificationEnabledDefaultsKey = "autoSwitchNotificationEnabled"
     static let celebrateWeeklyResetDefaultsKey = "celebrateWeeklyReset"
-    private static let lastSessionResetSeenKey = "lastSessionResetSeen"
     private static let lastWeeklyResetSeenKey = "lastWeeklyResetSeen"
     
     @Published var activeProvider: String? = nil
@@ -334,18 +333,24 @@ final class SessionStore: ObservableObject {
     private func detectResetCelebrations(in newUsage: UsageSnapshot) {
         let defaults = UserDefaults.standard
         let accountPrefix = newUsage.accountEmail ?? "default"
-        let weeklyKey = "\(SessionStore.lastWeeklyResetSeenKey)_\(accountPrefix)"
+        let weeklyKey = "\(SessionStore.lastWeeklyResetSeenKey)_\(accountPrefix)_wasAbove"
+        
+        // Clean up legacy Date-based key from previous implementation if it exists
+        let legacyWeeklyKey = "\(SessionStore.lastWeeklyResetSeenKey)_\(accountPrefix)"
+        if defaults.object(forKey: legacyWeeklyKey) != nil {
+            defaults.removeObject(forKey: legacyWeeklyKey)
+        }
 
         var triggeredWeekly = false
 
-        if let newReset = newUsage.weeklyResetAt {
-            let lastSeen = defaults.object(forKey: weeklyKey) as? Date
-            if lastSeen == nil || newReset > lastSeen! {
-                if let last = lastSeen, newReset.timeIntervalSince(last) > 3600, celebrateWeeklyReset {
-                    triggeredWeekly = true
-                }
-                defaults.set(newReset, forKey: weeklyKey)
+        if let weeklyUsedRatio = newUsage.weeklyUsedRatio {
+            let wasAbove = defaults.object(forKey: weeklyKey) as? Bool ?? false
+            let currentAbove = weeklyUsedRatio > 0.01
+
+            if wasAbove && !currentAbove && celebrateWeeklyReset {
+                triggeredWeekly = true
             }
+            defaults.set(currentAbove, forKey: weeklyKey)
         }
 
         if triggeredWeekly {
@@ -517,15 +522,32 @@ final class SessionStore: ObservableObject {
         do {
             let service = CodexSessionService(codexRoot: URL(fileURLWithPath: codexRootPath, isDirectory: true))
             try service.reconcileSessionIndex()
-            let sessions = try service.loadSessions()
-            let projects = service.loadProjects(including: sessions)
-            let usage = UsageMetricsService().loadUsageSnapshot(
+            var rawSessions = try service.loadSessions()
+            let projects = service.loadProjects(including: rawSessions)
+            
+            // Enrich sessions with usage metrics
+            let usageService = UsageMetricsService()
+            let usage = usageService.loadUsageSnapshot(
                 codexRoot: service.codexRootURL,
                 preferredAccountID: preferredAccountID
             )
+            
+            // Load metrics from cache (now persistent) to populate session list
+            let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            let cacheURL = appSupport.appendingPathComponent("codexStack/usage_cache.json")
+            if let data = try? Data(contentsOf: cacheURL),
+               let cache = try? JSONDecoder().decode(UsageCacheProxy.self, from: data) {
+                for i in 0..<rawSessions.count {
+                    if let metrics = cache.sessions[rawSessions[i].id]?.metrics {
+                        rawSessions[i].usageTokens = metrics.tokens
+                        rawSessions[i].usageCostUSD = metrics.cost
+                    }
+                }
+            }
+            
             return .success(
                 RefreshSnapshot(
-                    sessions: sessions,
+                    sessions: rawSessions,
                     projects: projects,
                     usage: usage
                 )
@@ -685,4 +707,18 @@ private enum SessionMutation: Sendable {
     case trashProject(projectPath: String?, projectName: String?)
     case rename(id: String, newTitle: String)
     case move(ids: Set<String>, projectPath: String?)
+}
+
+// Proxy types to read UsageMetricsService internal cache without public exposure
+private struct UsageCacheProxy: Decodable {
+    var sessions: [String: CachedSessionMetricsProxy]
+}
+
+private struct CachedSessionMetricsProxy: Decodable {
+    let metrics: SessionMetricsProxy
+}
+
+private struct SessionMetricsProxy: Decodable {
+    var tokens: Int64
+    var cost: Double
 }

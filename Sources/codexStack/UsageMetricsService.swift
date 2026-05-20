@@ -10,30 +10,8 @@ struct UsageMetricsService {
 
     private static let fallbackPricingByModel: [String: CodexModelPricing] = [
         "gpt-5": .init(inputPerToken: 1.25e-6, cachedInputPerToken: 1.25e-7, outputPerToken: 1e-5),
-        "gpt-5-codex": .init(inputPerToken: 1.25e-6, cachedInputPerToken: 1.25e-7, outputPerToken: 1e-5),
         "gpt-5-mini": .init(inputPerToken: 2.5e-7, cachedInputPerToken: 2.5e-8, outputPerToken: 2e-6),
-        "gpt-5-nano": .init(inputPerToken: 5e-8, cachedInputPerToken: 5e-9, outputPerToken: 4e-7),
         "gpt-5-pro": .init(inputPerToken: 1.5e-5, cachedInputPerToken: 1.5e-5, outputPerToken: 1.2e-4),
-        "gpt-5.1": .init(inputPerToken: 1.25e-6, cachedInputPerToken: 1.25e-7, outputPerToken: 1e-5),
-        "gpt-5.1-codex": .init(inputPerToken: 1.25e-6, cachedInputPerToken: 1.25e-7, outputPerToken: 1e-5),
-        "gpt-5.1-codex-max": .init(inputPerToken: 1.25e-6, cachedInputPerToken: 1.25e-7, outputPerToken: 1e-5),
-        "gpt-5.1-codex-mini": .init(inputPerToken: 2.5e-7, cachedInputPerToken: 2.5e-8, outputPerToken: 2e-6),
-        "gpt-5.2": .init(inputPerToken: 1.75e-6, cachedInputPerToken: 1.75e-7, outputPerToken: 1.4e-5),
-        "gpt-5.2-codex": .init(inputPerToken: 1.75e-6, cachedInputPerToken: 1.75e-7, outputPerToken: 1.4e-5),
-        "gpt-5.2-pro": .init(inputPerToken: 2.1e-5, cachedInputPerToken: 2.1e-5, outputPerToken: 1.68e-4),
-        "gpt-5.3-codex": .init(inputPerToken: 1.75e-6, cachedInputPerToken: 1.75e-7, outputPerToken: 1.4e-5),
-        "gpt-5.4": .init(
-            inputPerToken: 2.5e-6,
-            cachedInputPerToken: 2.5e-7,
-            outputPerToken: 1.5e-5,
-            longContextThreshold: 272_000,
-            inputPerTokenAboveThreshold: 5e-6,
-            cachedInputPerTokenAboveThreshold: 5e-7,
-            outputPerTokenAboveThreshold: 2.25e-5
-        ),
-        "gpt-5.4-mini": .init(inputPerToken: 7.5e-7, cachedInputPerToken: 7.5e-8, outputPerToken: 4.5e-6),
-        "gpt-5.4-nano": .init(inputPerToken: 2e-7, cachedInputPerToken: 2e-8, outputPerToken: 1.25e-6),
-        "gpt-5.4-pro": .init(inputPerToken: 3e-5, cachedInputPerToken: 3e-5, outputPerToken: 1.8e-4),
         "gpt-5.5": .init(
             inputPerToken: 5e-6,
             cachedInputPerToken: 5e-7,
@@ -43,13 +21,19 @@ struct UsageMetricsService {
             cachedInputPerTokenAboveThreshold: 1e-6,
             outputPerTokenAboveThreshold: 4.5e-5
         ),
-        "gpt-5.5-pro": .init(inputPerToken: 3e-5, cachedInputPerToken: 3e-5, outputPerToken: 1.8e-4)
+        "o1-preview": .init(inputPerToken: 1.5e-5, cachedInputPerToken: 1.5e-5, outputPerToken: 6e-5),
+        "o1-mini": .init(inputPerToken: 1.1e-6, cachedInputPerToken: 1.1e-7, outputPerToken: 4.4e-6)
     ]
     
     private let pricingByModel: [String: CodexModelPricing]
+    private let cacheURL: URL
     
     init() {
         self.pricingByModel = Self.fallbackPricingByModel.merging(ModelPricingSyncService.shared.syncedPrices) { (_, new) in new }
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let appDir = appSupport.appendingPathComponent("codexStack")
+        try? FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
+        self.cacheURL = appDir.appendingPathComponent("usage_cache.json")
     }
 
     func loadUsageSnapshot(codexRoot: URL, preferredAccountID: String? = nil) -> UsageSnapshot {
@@ -80,6 +64,13 @@ struct UsageMetricsService {
 
         let roots = [codexRoot.appending(path: "sessions"), codexRoot.appending(path: "archived_sessions")]
         let files = collectSessionFiles(roots: roots)
+        
+        // Build metadata index to handle forked sessions
+        let sessionIndex = buildSessionIndex(files: files)
+        
+        // Load persistent cache
+        var usageCache = loadCache()
+        var sessionTotals: [String: CodexTotals] = [:]
 
         var todayTokens: Int64 = 0
         var last30Tokens: Int64 = 0
@@ -89,96 +80,60 @@ struct UsageMetricsService {
         var dailyBuckets: [Date: DayBucket] = [:]
 
         for fileURL in files {
-            guard let content = try? String(contentsOf: fileURL, encoding: .utf8) else { continue }
-
-            var currentModel = "gpt-5.5"
-            var previousTotals: CodexTotals?
-            var rawTotalsBaseline: CodexTotals?
-            var sawDivergentTotals = false
-
-            content.enumerateLines { line, _ in
-                guard let data = line.data(using: .utf8),
-                      let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                    return
-                }
-
-                if let model = parseModelFromTurnContext(root), !model.isEmpty {
-                    currentModel = model
-                }
-
-                guard let timestamp = parseTimestamp(root),
-                      let event = parseTokenEvent(root) else {
-                    return
-                }
-                let eventModel = normalizeModelName(event.model ?? currentModel)
-
-                latestTimestamp = maxDate(latestTimestamp, timestamp)
-
-                let deltas: CodexTotals
-                if let last = event.lastTotals {
-                    deltas = last
-                    let counted = (previousTotals ?? .zero).adding(last)
-                    previousTotals = counted
-                    if let total = event.totalTotals {
-                        rawTotalsBaseline = total
-                        if total != counted {
-                            sawDivergentTotals = true
-                        }
-                    } else {
-                        rawTotalsBaseline = counted
-                    }
-                } else if let total = event.totalTotals {
-                    if sawDivergentTotals {
-                        deltas = divergentTotalDelta(
-                            rawBaseline: rawTotalsBaseline,
-                            countedBaseline: previousTotals,
-                            current: total
-                        )
-                    } else {
-                        deltas = totalDelta(from: rawTotalsBaseline, to: total)
-                    }
-                    previousTotals = (previousTotals ?? .zero).adding(deltas)
-                    rawTotalsBaseline = total
-                    if rawTotalsBaseline != previousTotals {
-                        sawDivergentTotals = true
-                    }
-                } else {
-                    return
-                }
-
-                let deltaInput = max(0, deltas.input)
-                let deltaCachedInput = min(deltaInput, max(0, deltas.cachedInput))
-                let deltaOutput = max(0, deltas.output)
-                let deltaTotal = deltaInput + deltaOutput
-
-                guard deltaTotal > 0 else { return }
-                guard timestamp >= thirtyDaysAgo else { return }
-
-                last30Tokens += Int64(deltaTotal)
-                let eventCost = estimateCost(
-                    model: eventModel,
-                    deltaInput: deltaInput,
-                    deltaCachedInput: deltaCachedInput,
-                    deltaOutput: deltaOutput
+            let sessionID = extractSessionID(from: fileURL.lastPathComponent) ?? UUID().uuidString
+            let fileAttr = try? fileManager.attributesOfItem(atPath: fileURL.path)
+            let fileSize = (fileAttr?[.size] as? Int64) ?? 0
+            let modDate = (fileAttr?[.modificationDate] as? Date) ?? .distantPast
+            
+            let metrics: SessionMetrics
+            if let cached = usageCache.sessions[sessionID], 
+               cached.fileSize == fileSize, 
+               cached.modificationDate == modDate {
+                metrics = cached.metrics
+            } else {
+                metrics = scanSessionFile(
+                    fileURL, 
+                    sessionIndex: sessionIndex, 
+                    sessionTotals: &sessionTotals,
+                    thirtyDaysAgo: thirtyDaysAgo
                 )
-                last30Cost += eventCost
-
-                let day = Calendar.current.startOfDay(for: timestamp)
-                var bucket = dailyBuckets[day] ?? DayBucket.empty
-                bucket.tokens += Int64(deltaTotal)
-                bucket.cost += eventCost
-                var modelBucket = bucket.models[eventModel] ?? ModelBucket.empty
-                modelBucket.tokens += Int64(deltaTotal)
-                modelBucket.cost += eventCost
-                bucket.models[eventModel] = modelBucket
-                dailyBuckets[day] = bucket
-
-                if timestamp >= todayStart {
-                    todayTokens += Int64(deltaTotal)
-                    todayCost += eventCost
+                usageCache.sessions[sessionID] = CachedSessionMetrics(
+                    metrics: metrics,
+                    fileSize: fileSize,
+                    modificationDate: modDate
+                )
+            }
+            
+            // Accumulate global usage
+            if let lastTS = metrics.lastTimestamp {
+                latestTimestamp = maxDate(latestTimestamp, lastTS)
+            }
+            
+            for (day, bucket) in metrics.dailyBuckets {
+                if day >= thirtyDaysAgo {
+                    last30Tokens += bucket.tokens
+                    last30Cost += bucket.cost
+                    
+                    if day >= todayStart {
+                        todayTokens += bucket.tokens
+                        todayCost += bucket.cost
+                    }
+                    
+                    var globalBucket = dailyBuckets[day] ?? DayBucket.empty
+                    globalBucket.tokens += bucket.tokens
+                    globalBucket.cost += bucket.cost
+                    for (model, mBucket) in bucket.models {
+                        var globalModelBucket = globalBucket.models[model] ?? ModelBucket.empty
+                        globalModelBucket.tokens += mBucket.tokens
+                        globalModelBucket.cost += mBucket.cost
+                        globalBucket.models[model] = globalModelBucket
+                    }
+                    dailyBuckets[day] = globalBucket
                 }
             }
         }
+        
+        saveCache(usageCache)
 
         let dailySeries = recentSevenDaySeries(from: dailyBuckets, todayStart: todayStart)
 
@@ -199,6 +154,259 @@ struct UsageMetricsService {
             dailyCostSeries: dailySeries,
             accounts: orderedAccountSnapshots
         )
+    }
+    
+    // MARK: - Optimization Helpers
+
+    private func scanSessionFile(
+        _ fileURL: URL, 
+        sessionIndex: [String: URL], 
+        sessionTotals: inout [String: CodexTotals],
+        thirtyDaysAgo: Date
+    ) -> SessionMetrics {
+        guard let content = try? String(contentsOf: fileURL, encoding: .utf8) else { return .empty }
+
+        var currentModel = "gpt-5.5"
+        var previousTotals: CodexTotals?
+        var rawTotalsBaseline: CodexTotals?
+        var sawDivergentTotals = false
+        var inheritedTotals: CodexTotals?
+        var remainingInheritedTotals: CodexTotals?
+        
+        var metrics = SessionMetrics.empty
+
+        if let metadata = parseSessionMetadata(from: content) {
+            if let forkedFromId = metadata.forkedFromId, let forkedAt = metadata.forkTimestamp {
+                let forkPoint = resolveInheritedTotals(
+                    forkedFromId: forkedFromId,
+                    forkedAt: forkedAt,
+                    index: sessionIndex,
+                    totalsCache: &sessionTotals
+                )
+                inheritedTotals = forkPoint
+                remainingInheritedTotals = forkPoint
+            }
+        }
+
+        content.enumerateLines { line, _ in
+            guard let data = line.data(using: .utf8),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return
+            }
+
+            if let model = parseModelFromTurnContext(root), !model.isEmpty {
+                currentModel = model
+            }
+
+            guard let timestamp = parseTimestamp(root),
+                  let event = parseTokenEvent(root) else {
+                return
+            }
+            let eventModel = normalizeModelName(event.model ?? currentModel)
+
+            metrics.lastTimestamp = maxDate(metrics.lastTimestamp, timestamp)
+
+            let deltas: CodexTotals
+            if let last = event.lastTotals {
+                let adjustedLast = adjustForInheritance(rawDelta: last, remaining: &remainingInheritedTotals)
+                deltas = adjustedLast
+                
+                let counted = (previousTotals ?? .zero).adding(adjustedLast)
+                previousTotals = counted
+                
+                if let total = event.totalTotals {
+                    let currentTotal: CodexTotals
+                    if let inheritance = inheritedTotals {
+                        currentTotal = CodexTotals(
+                            input: max(0, total.input - inheritance.input),
+                            cachedInput: max(0, total.cachedInput - inheritance.cachedInput),
+                            output: max(0, total.output - inheritance.output)
+                        )
+                    } else {
+                        currentTotal = total
+                    }
+                    rawTotalsBaseline = currentTotal
+                    if currentTotal != counted {
+                        sawDivergentTotals = true
+                    }
+                } else {
+                    rawTotalsBaseline = counted
+                }
+            } else if let total = event.totalTotals {
+                let currentTotal: CodexTotals
+                if let inheritance = inheritedTotals {
+                    currentTotal = CodexTotals(
+                        input: max(0, total.input - inheritance.input),
+                        cachedInput: max(0, total.cachedInput - inheritance.cachedInput),
+                        output: max(0, total.output - inheritance.output)
+                    )
+                } else {
+                    currentTotal = total
+                }
+                
+                if sawDivergentTotals {
+                    deltas = divergentTotalDelta(
+                        rawBaseline: rawTotalsBaseline,
+                        countedBaseline: previousTotals,
+                        current: currentTotal
+                    )
+                } else {
+                    deltas = totalDelta(from: rawTotalsBaseline, to: currentTotal)
+                }
+                previousTotals = (previousTotals ?? .zero).adding(deltas)
+                rawTotalsBaseline = currentTotal
+                if rawTotalsBaseline != previousTotals {
+                    sawDivergentTotals = true
+                }
+                remainingInheritedTotals = nil 
+            } else {
+                return
+            }
+
+            let deltaInput = max(0, deltas.input)
+            let deltaCachedInput = min(deltaInput, max(0, deltas.cachedInput))
+            let deltaOutput = max(0, deltas.output)
+            let deltaTotal = deltaInput + deltaOutput
+
+            guard deltaTotal > 0 else { return }
+            metrics.tokens += Int64(deltaTotal)
+            
+            let eventCost = estimateCost(
+                model: eventModel,
+                deltaInput: deltaInput,
+                deltaCachedInput: deltaCachedInput,
+                deltaOutput: deltaOutput
+            )
+            metrics.cost += eventCost
+
+            let day = Calendar.current.startOfDay(for: timestamp)
+            var bucket = metrics.dailyBuckets[day] ?? DayBucket.empty
+            bucket.tokens += Int64(deltaTotal)
+            bucket.cost += eventCost
+            var modelBucket = bucket.models[eventModel] ?? ModelBucket.empty
+            modelBucket.tokens += Int64(deltaTotal)
+            modelBucket.cost += eventCost
+            bucket.models[eventModel] = modelBucket
+            metrics.dailyBuckets[day] = bucket
+        }
+        
+        // Cache final session totals for downstream inheritance
+        if let sessionID = extractSessionID(from: fileURL.lastPathComponent), let final = previousTotals {
+            sessionTotals[sessionID] = final
+        }
+        
+        return metrics
+    }
+
+    private func adjustForInheritance(rawDelta: CodexTotals, remaining: inout CodexTotals?) -> CodexTotals {
+        guard var rem = remaining else { return rawDelta }
+        
+        let adjusted = CodexTotals(
+            input: max(0, rawDelta.input - rem.input),
+            cachedInput: max(0, rawDelta.cachedInput - rem.cachedInput),
+            output: max(0, rawDelta.output - rem.output)
+        )
+        
+        rem = CodexTotals(
+            input: max(0, rem.input - rawDelta.input),
+            cachedInput: max(0, rem.cachedInput - rawDelta.cachedInput),
+            output: max(0, rem.output - rawDelta.output)
+        )
+        
+        remaining = (rem.input == 0 && rem.cachedInput == 0 && rem.output == 0) ? nil : rem
+        return adjusted
+    }
+
+    private struct SessionFileMetadata {
+        let sessionId: String?
+        let forkedFromId: String?
+        let forkTimestamp: String?
+    }
+
+    private func buildSessionIndex(files: [URL]) -> [String: URL] {
+        var index: [String: URL] = [:]
+        for fileURL in files {
+            let fileName = fileURL.lastPathComponent
+            if let id = extractSessionID(from: fileName) {
+                index[id] = fileURL
+            }
+        }
+        return index
+    }
+
+    private func extractSessionID(from fileName: String) -> String? {
+        let idRegex = try! NSRegularExpression(
+            pattern: #"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$"#,
+            options: [.caseInsensitive]
+        )
+        let nsRange = NSRange(fileName.startIndex..<fileName.endIndex, in: fileName)
+        guard let match = idRegex.firstMatch(in: fileName, options: [], range: nsRange),
+              match.numberOfRanges > 1,
+              let range = Range(match.range(at: 1), in: fileName) else {
+            return nil
+        }
+        return String(fileName[range])
+    }
+
+    private func parseSessionMetadata(from content: String) -> SessionFileMetadata? {
+        var sessionId: String?
+        var forkedFromId: String?
+        var forkTimestamp: String?
+        
+        content.enumerateLines { line, stop in
+            guard let data = line.data(using: .utf8),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  (root["type"] as? String) == "session_meta" else {
+                return
+            }
+            
+            let payload = root["payload"] as? [String: Any]
+            sessionId = payload?["session_id"] as? String ?? root["session_id"] as? String
+            forkedFromId = payload?["forked_from_id"] as? String ?? payload?["parent_session_id"] as? String
+            forkTimestamp = payload?["timestamp"] as? String ?? root["timestamp"] as? String
+            stop = true
+        }
+        
+        return SessionFileMetadata(sessionId: sessionId, forkedFromId: forkedFromId, forkTimestamp: forkTimestamp)
+    }
+
+    private func resolveInheritedTotals(
+        forkedFromId: String, 
+        forkedAt: String, 
+        index: [String: URL],
+        totalsCache: inout [String: CodexTotals]
+    ) -> CodexTotals? {
+        if let cached = totalsCache[forkedFromId] {
+            return cached
+        }
+        
+        guard let parentURL = index[forkedFromId],
+              let content = try? String(contentsOf: parentURL, encoding: .utf8) else {
+            return nil
+        }
+        
+        var bestTotals: CodexTotals?
+        content.enumerateLines { line, _ in
+            guard let data = line.data(using: .utf8),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let timestamp = root["timestamp"] as? String,
+                  timestamp <= forkedAt,
+                  (root["type"] as? String) == "event_msg",
+                  let payload = root["payload"] as? [String: Any],
+                  (payload["type"] as? String) == "token_count",
+                  let info = payload["info"] as? [String: Any],
+                  let totalUsage = info["total_token_usage"] else {
+                return
+            }
+            
+            if let totals = parseCodexTotals(totalUsage) {
+                bestTotals = totals
+            }
+        }
+        if let final = bestTotals {
+            totalsCache[forkedFromId] = final
+        }
+        return bestTotals
     }
 
     private func recentSevenDaySeries(
@@ -748,15 +956,30 @@ struct UsageMetricsService {
         if model.hasPrefix("openai/") {
             model = String(model.dropFirst("openai/".count))
         }
+        if model.hasPrefix("anthropic.") {
+            model = String(model.dropFirst("anthropic.".count))
+        }
+        
         if pricingByModel[model] != nil {
             return model
         }
-        if let range = model.range(of: #"-\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) {
+        
+        // Remove date suffix like -20240513 or -2024-05-13
+        if let range = model.range(of: #"-\d{4}-?\d{2}-?\d{2}$"#, options: .regularExpression) {
             let base = String(model[..<range.lowerBound])
             if pricingByModel[base] != nil {
                 return base
             }
         }
+        
+        // Handle @ suffix
+        if let atIndex = model.firstIndex(of: "@") {
+            let base = String(model[..<atIndex])
+            if pricingByModel[base] != nil {
+                return base
+            }
+        }
+        
         return model
     }
 
@@ -847,7 +1070,25 @@ struct UsageMetricsService {
         guard let lhs else { return rhs }
         return lhs > rhs ? lhs : rhs
     }
+    
+    // MARK: - Persistence & Caching
+    
+    private func loadCache() -> UsageCache {
+        guard let data = try? Data(contentsOf: cacheURL),
+              let cache = try? JSONDecoder().decode(UsageCache.self, from: data) else {
+            return UsageCache(sessions: [:])
+        }
+        return cache
+    }
+    
+    private func saveCache(_ cache: UsageCache) {
+        if let data = try? JSONEncoder().encode(cache) {
+            try? data.write(to: cacheURL)
+        }
+    }
 }
+
+// MARK: - Supporting Types
 
 struct CodexModelPricing: Codable {
     let inputPerToken: Double
@@ -877,10 +1118,10 @@ struct CodexModelPricing: Codable {
     }
 }
 
-private struct CodexTotals: Equatable {
-    let input: Int
-    let cachedInput: Int
-    let output: Int
+private struct CodexTotals: Codable, Equatable {
+    var input: Int
+    var cachedInput: Int
+    var output: Int
 
     static let zero = CodexTotals(input: 0, cachedInput: 0, output: 0)
 
@@ -899,19 +1140,38 @@ private struct TokenEvent {
     let lastTotals: CodexTotals?
 }
 
-private struct ModelBucket {
+private struct ModelBucket: Codable {
     var tokens: Int64
     var cost: Double
 
     static let empty = ModelBucket(tokens: 0, cost: 0)
 }
 
-private struct DayBucket {
+private struct DayBucket: Codable {
     var tokens: Int64
     var cost: Double
     var models: [String: ModelBucket]
 
     static let empty = DayBucket(tokens: 0, cost: 0, models: [:])
+}
+
+private struct SessionMetrics: Codable {
+    var tokens: Int64
+    var cost: Double
+    var dailyBuckets: [Date: DayBucket]
+    var lastTimestamp: Date?
+    
+    static let empty = SessionMetrics(tokens: 0, cost: 0, dailyBuckets: [:], lastTimestamp: nil)
+}
+
+private struct CachedSessionMetrics: Codable {
+    let metrics: SessionMetrics
+    let fileSize: Int64
+    let modificationDate: Date
+}
+
+private struct UsageCache: Codable {
+    var sessions: [String: CachedSessionMetrics]
 }
 
 private struct AccountUsageProfile {

@@ -170,6 +170,32 @@ struct CodexSession: Identifiable, Hashable, Sendable {
     let isArchived: Bool
     let sizeInBytes: Int64
     let projectPath: String?
+    
+    // Usage metrics
+    var usageTokens: Int64
+    var usageCostUSD: Double
+
+    init(
+        id: String,
+        title: String,
+        updatedAt: Date,
+        fileURL: URL,
+        isArchived: Bool,
+        sizeInBytes: Int64,
+        projectPath: String?,
+        usageTokens: Int64 = 0,
+        usageCostUSD: Double = 0
+    ) {
+        self.id = id
+        self.title = title
+        self.updatedAt = updatedAt
+        self.fileURL = fileURL
+        self.isArchived = isArchived
+        self.sizeInBytes = sizeInBytes
+        self.projectPath = projectPath
+        self.usageTokens = usageTokens
+        self.usageCostUSD = usageCostUSD
+    }
 
     var projectID: String {
         guard let projectPath, !projectPath.isEmpty else { return "chats" }

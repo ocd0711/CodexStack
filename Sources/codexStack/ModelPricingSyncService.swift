@@ -8,6 +8,8 @@ struct LiteLLMPrice: Codable {
     let input_cost_per_token: Double?
     let output_cost_per_token: Double?
     let cache_read_input_token_cost: Double?
+    let cache_creation_input_token_cost: Double?
+    let context_window: Int?
 }
 
 class ModelPricingSyncService {
@@ -72,18 +74,10 @@ class ModelPricingSyncService {
     }
 
     func syncPrices() async {
-        lock.lock()
-        if isSyncing {
-            lock.unlock()
-            return
-        }
-        isSyncing = true
-        lock.unlock()
+        guard tryBeginSync() else { return }
         
         defer {
-            lock.lock()
-            isSyncing = false
-            lock.unlock()
+            finishSync()
         }
         
         guard let url = URL(string: "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json") else { return }
@@ -109,20 +103,36 @@ class ModelPricingSyncService {
             }
             
             if !newPrices.isEmpty {
-                self.lock.lock()
-                self._syncedPrices = newPrices
-                self.lock.unlock()
-                
-                DispatchQueue.main.async {
-                    if let encoded = try? JSONEncoder().encode(newPrices) {
-                        try? encoded.write(to: self.cacheURL)
-                    }
-                    UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "pricingLastSync")
-                    NotificationCenter.default.post(name: .pricingUpdated, object: nil)
-                }
+                updateSyncedPrices(newPrices)
             }
         } catch {
             print("Failed to sync model prices: \(error)")
         }
+    }
+    
+    private func tryBeginSync() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if isSyncing { return false }
+        isSyncing = true
+        return true
+    }
+    
+    private func finishSync() {
+        lock.lock()
+        defer { lock.unlock() }
+        isSyncing = false
+    }
+    
+    private func updateSyncedPrices(_ newPrices: [String: CodexModelPricing]) {
+        lock.lock()
+        _syncedPrices = newPrices
+        lock.unlock()
+        
+        if let encoded = try? JSONEncoder().encode(newPrices) {
+            try? encoded.write(to: self.cacheURL)
+        }
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "pricingLastSync")
+        NotificationCenter.default.post(name: .pricingUpdated, object: nil)
     }
 }

@@ -297,7 +297,9 @@ struct CodexSessionService {
                     fileURL: fileURL,
                     isArchived: archived,
                     sizeInBytes: size,
-                    projectPath: projectPath
+                    projectPath: projectPath,
+                    usageTokens: 0,
+                    usageCostUSD: 0
                 )
             )
         }
