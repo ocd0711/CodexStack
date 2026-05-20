@@ -123,17 +123,29 @@ struct CodexStackApp: App {
                     cachedStatusBarIcon = computeStatusBarIcon()
                     return
                 }
-                var phase = 0.0
+                var blinkPhase = 0.0
                 let nsPerFrame: UInt64 = 1_000_000_000 / 30
                 let key = iconCacheKey
                 while !Task.isCancelled {
+                    // Blink cycle: close (0–0.15), hold (0.15–0.20), open (0.20–0.35), pause (0.35–1.0)
+                    let blink: Double
+                    if blinkPhase < 0.15 {
+                        blink = blinkPhase / 0.15
+                    } else if blinkPhase < 0.20 {
+                        blink = 1.0
+                    } else if blinkPhase < 0.35 {
+                        blink = 1.0 - (blinkPhase - 0.20) / 0.15
+                    } else {
+                        blink = 0.0
+                    }
                     cachedStatusBarIcon = StatusIconRenderer.makeIcon(
                         sessionUsedRatio: key.session,
                         weeklyUsedRatio: key.weekly,
                         progressMode: key.mode,
-                        animationPhase: phase
+                        blinkAmount: blink
                     )
-                    phase += 2.7 / 30.0
+                    blinkPhase += 1.0 / 36.0  // 1.2-second cycle at 30fps
+                    if blinkPhase >= 1.0 { blinkPhase -= 1.0 }
                     try? await Task.sleep(nanoseconds: nsPerFrame)
                 }
             }

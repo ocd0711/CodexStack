@@ -8,34 +8,23 @@ enum StatusIconRenderer {
         sessionUsedRatio: Double?,
         weeklyUsedRatio: Double?,
         progressMode: UtilizationProgressMode,
-        animationPhase: Double? = nil
+        blinkAmount: Double = 0
     ) -> NSImage {
         renderImage {
+            let sessionPercent = displayPercent(from: sessionUsedRatio, progressMode: progressMode)
+            let weeklyPercent = weeklyUsedRatio == nil ? nil : displayPercent(from: weeklyUsedRatio, progressMode: progressMode)
+
             let barWidth = 30
             let barX = 3
             let top = PixelRect(x: barX, y: 19, width: barWidth, height: 12)
             let bottom = PixelRect(x: barX, y: 5, width: barWidth, height: 8)
             let single = PixelRect(x: barX, y: 10, width: barWidth, height: 16)
 
-            if let phase = animationPhase {
-                // Loading animation: cylon sweep on both bars
-                let primary = 5 + 90 * (sin(phase) * 0.5 + 0.5)
-                let secondary = 5 + 90 * (sin(phase + .pi * 0.6) * 0.5 + 0.5)
-                if weeklyUsedRatio != nil {
-                    drawCapsule(top, percent: primary, face: true, alpha: 1)
-                    drawCapsule(bottom, percent: secondary, face: false, alpha: 0.92)
-                } else {
-                    drawCapsule(single, percent: primary, face: true, alpha: 1)
-                }
+            if let weeklyPercent {
+                drawCapsule(top, percent: sessionPercent, face: true, alpha: 1, blinkAmount: blinkAmount)
+                drawCapsule(bottom, percent: weeklyPercent, face: false, alpha: 0.92)
             } else {
-                let sessionPercent = displayPercent(from: sessionUsedRatio, progressMode: progressMode)
-                let weeklyPercent = weeklyUsedRatio == nil ? nil : displayPercent(from: weeklyUsedRatio, progressMode: progressMode)
-                if let weeklyPercent {
-                    drawCapsule(top, percent: sessionPercent, face: true, alpha: 1)
-                    drawCapsule(bottom, percent: weeklyPercent, face: false, alpha: 0.92)
-                } else {
-                    drawCapsule(single, percent: sessionPercent, face: true, alpha: 1)
-                }
+                drawCapsule(single, percent: sessionPercent, face: true, alpha: 1, blinkAmount: blinkAmount)
             }
         }
     }
@@ -47,7 +36,7 @@ enum StatusIconRenderer {
         return value * 100
     }
 
-    private static func drawCapsule(_ rect: PixelRect, percent: Double?, face: Bool, alpha: CGFloat) {
+    private static func drawCapsule(_ rect: PixelRect, percent: Double?, face: Bool, alpha: CGFloat, blinkAmount: Double = 0) {
         let base = NSColor.labelColor
         let fill = base.withAlphaComponent(alpha)
         let trackPath = NSBezierPath(
@@ -99,11 +88,14 @@ enum StatusIconRenderer {
         ctx?.setShouldAntialias(false)
         ctx?.setBlendMode(.clear)
         let eyeSize = 4
+        let eyeH = max(0, Int((Double(eyeSize) * (1.0 - blinkAmount)).rounded()))
         let eyeOffset = 7
         let centerX = rect.x + rect.width / 2
         let centerY = rect.y + rect.height / 2
-        ctx?.fill(PixelRect(x: centerX - eyeOffset - eyeSize / 2, y: centerY - eyeSize / 2, width: eyeSize, height: eyeSize).cgRect)
-        ctx?.fill(PixelRect(x: centerX + eyeOffset - eyeSize / 2, y: centerY - eyeSize / 2, width: eyeSize, height: eyeSize).cgRect)
+        if eyeH > 0 {
+            ctx?.fill(PixelRect(x: centerX - eyeOffset - eyeSize / 2, y: centerY - eyeH / 2, width: eyeSize, height: eyeH).cgRect)
+            ctx?.fill(PixelRect(x: centerX + eyeOffset - eyeSize / 2, y: centerY - eyeH / 2, width: eyeSize, height: eyeH).cgRect)
+        }
         ctx?.setBlendMode(.normal)
         ctx?.restoreGState()
 
