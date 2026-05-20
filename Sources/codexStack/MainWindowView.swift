@@ -72,7 +72,10 @@ struct MainWindowView: View {
                 latest: allByProjectID[project.id]?.map(\.updatedAt).max() ?? .distantPast
             )
         }
-        return mapped.sorted { $0.latest > $1.latest }
+        return mapped.sorted {
+            if $0.latest != $1.latest { return $0.latest > $1.latest }
+            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
     }
 
     private func shouldIncludeProject(
@@ -604,6 +607,10 @@ private struct SessionRow: View {
                     Text(session.isArchived ? "Archived" : "Active")
                         .foregroundStyle(session.isArchived ? .orange : .secondary)
                     Spacer(minLength: 6)
+                    if let cost = session.costLabel {
+                        Text(cost)
+                            .foregroundStyle(.green.opacity(0.8))
+                    }
                     Text(session.sizeLabel)
                 }
                 .font(.system(size: 11))
@@ -659,6 +666,9 @@ private struct SessionDetailView: View {
                                     systemImage: "clock"
                                 )
                                 InfoPill(text: session.sizeLabel, systemImage: "doc")
+                                if let cost = session.costLabel {
+                                    InfoPill(text: cost, systemImage: "dollarsign.circle")
+                                }
                             }
                         }
                         .padding(14)
@@ -678,6 +688,9 @@ private struct SessionDetailView: View {
                                 DetailRow(label: "Project Path", value: projectPath, monospace: true)
                             }
                             DetailRow(label: "Size", value: session.sizeLabel)
+                            if let cost = session.costLabel {
+                                DetailRow(label: "Cost", value: cost)
+                            }
                             DetailRow(label: "File", value: session.fileURL.path, monospace: true)
                         }
 

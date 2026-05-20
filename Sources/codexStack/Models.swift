@@ -214,6 +214,14 @@ struct CodexSession: Identifiable, Hashable, Sendable {
     var sizeLabel: String {
         ByteCountFormatter.string(fromByteCount: sizeInBytes, countStyle: .file)
     }
+
+    var costLabel: String? {
+        guard usageCostUSD > 0 else { return nil }
+        if usageCostUSD < 0.01 {
+            return String(format: "$%.4f", usageCostUSD)
+        }
+        return String(format: "$%.2f", usageCostUSD)
+    }
 }
 
 struct CodexProject: Identifiable, Hashable, Sendable {

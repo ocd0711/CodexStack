@@ -913,6 +913,11 @@ struct UsageMetricsService {
             intFromAny(dict["cached_input_tokens"] ?? dict["cache_read_input_tokens"]) ?? 0
         )
         let output = max(0, intFromAny(dict["output_tokens"]) ?? 0)
+        // Legacy format: only total_tokens is recorded without input/output breakdown.
+        // Approximate as 70% input / 30% output for cost estimation.
+        if input == 0 && output == 0, let total = intFromAny(dict["total_tokens"]), total > 0 {
+            return CodexTotals(input: total * 7 / 10, cachedInput: 0, output: total * 3 / 10)
+        }
         return CodexTotals(input: input, cachedInput: cached, output: output)
     }
 
