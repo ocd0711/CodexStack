@@ -39,7 +39,10 @@ final class SessionStore: ObservableObject {
     
     @Published var activeProvider: String? = nil
     @Published var availableProviders: [String] = []
-    
+
+    @Published private(set) var utilizationHistories: [String: [UtilizationSeriesHistory]] = [:]
+    private let utilizationHistoryStore = UtilizationHistoryStore()
+
     var onResetCelebration: ((ResetCelebrationKind) -> Void)?
     var onAutoSwitchPerformed: ((String) -> Void)?
     @Published private(set) var isRefreshing = false
@@ -70,6 +73,7 @@ final class SessionStore: ObservableObject {
         self.autoSwitchWeeklyThreshold = autoSwitchWeeklyThreshold
         self.autoSwitchNotificationEnabled = autoSwitchNotificationEnabled
         self.celebrateWeeklyReset = celebrateWeeklyReset
+        self.utilizationHistories = utilizationHistoryStore.load()
         refresh()
         scheduleAutoRefresh()
         
@@ -189,10 +193,28 @@ final class SessionStore: ObservableObject {
                         selectedProject = SessionStore.allProjectsLabel
                     }
                     lastError = nil
+                    recordUtilizationHistory(from: snapshot.usage)
                 case let .failure(message):
                     lastError = message
                 }
             }
+        }
+    }
+
+    private func recordUtilizationHistory(from snapshot: UsageSnapshot) {
+        let accounts = snapshot.accounts.isEmpty ? [UsageAccountSnapshot(
+            id: snapshot.accountEmail ?? "primary",
+            accountID: nil, email: snapshot.accountEmail, name: snapshot.accountName,
+            note: nil, planType: snapshot.planType, source: snapshot.source,
+            sessionUsedRatio: snapshot.sessionUsedRatio, weeklyUsedRatio: snapshot.weeklyUsedRatio,
+            sessionResetAt: snapshot.sessionResetAt, weeklyResetAt: snapshot.weeklyResetAt,
+            updatedAt: snapshot.updatedAt, expiresAt: nil,
+            isCurrentCodexAccount: true, isCredentialExpired: false
+        )] : snapshot.accounts
+        UtilizationHistoryStore.record(accounts: accounts, into: &utilizationHistories)
+        let snapshot = utilizationHistories
+        Task.detached(priority: .background) { [store = utilizationHistoryStore] in
+            store.save(snapshot)
         }
     }
 

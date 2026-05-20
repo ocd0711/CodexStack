@@ -237,7 +237,8 @@ private struct MenuBarPanel: View {
                     usage: store.usage,
                     accounts: sortedAccounts,
                     progressMode: store.utilizationProgressMode,
-                    activeAccountID: activeAccountID
+                    activeAccountID: activeAccountID,
+                    utilizationHistories: store.utilizationHistories
                 )
                 embeddedCostSection
                 projectsSummaryCard
@@ -1192,69 +1193,14 @@ private struct CostBarsView: View {
 }
 
 @MainActor
-private struct MouseLocationReader: NSViewRepresentable {
-    let onMoved: (CGPoint?) -> Void
-
-    func makeNSView(context: Context) -> TrackingView {
-        let view = TrackingView()
-        view.onMoved = onMoved
-        return view
-    }
-
-    func updateNSView(_ nsView: TrackingView, context: Context) {
-        nsView.onMoved = onMoved
-    }
-
-    final class TrackingView: NSView {
-        var onMoved: ((CGPoint?) -> Void)?
-        private var trackingArea: NSTrackingArea?
-
-        override var isFlipped: Bool { true }
-
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            self.window?.acceptsMouseMovedEvents = true
-            updateTrackingAreas()
-        }
-
-        override func updateTrackingAreas() {
-            super.updateTrackingAreas()
-            if let trackingArea {
-                removeTrackingArea(trackingArea)
-            }
-            let options: NSTrackingArea.Options = [
-                .activeAlways,
-                .inVisibleRect,
-                .mouseEnteredAndExited,
-                .mouseMoved,
-            ]
-            let area = NSTrackingArea(rect: .zero, options: options, owner: self, userInfo: nil)
-            addTrackingArea(area)
-            trackingArea = area
-        }
-
-        override func mouseEntered(with event: NSEvent) {
-            super.mouseEntered(with: event)
-            onMoved?(convert(event.locationInWindow, from: nil))
-        }
-
-        override func mouseMoved(with event: NSEvent) {
-            super.mouseMoved(with: event)
-            onMoved?(convert(event.locationInWindow, from: nil))
-        }
-
-        override func mouseExited(with event: NSEvent) {
-            super.mouseExited(with: event)
-            onMoved?(nil)
-        }
-    }
-}
-
 private struct UtilizationSection: View {
     let usage: UsageSnapshot
     let accounts: [UsageAccountSnapshot]
     let progressMode: UtilizationProgressMode
     let activeAccountID: String?
+    let utilizationHistories: [String: [UtilizationSeriesHistory]]
+
+    @State private var showHistory = false
 
     private var accountSections: [UsageAccountSnapshot] {
         if !accounts.isEmpty {
@@ -1280,10 +1226,27 @@ private struct UtilizationSection: View {
         return [fallback]
     }
 
+    private var activeAccountHistories: [UtilizationSeriesHistory] {
+        let key = activeAccountID ?? accountSections.first?.id ?? ""
+        return utilizationHistories[key] ?? []
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Subscription Utilization")
-                .font(.headline)
+            HStack {
+                Text("Subscription Utilization")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { showHistory.toggle() }
+                } label: {
+                    Image(systemName: showHistory ? "chart.bar.fill" : "chart.bar")
+                        .font(.system(size: 13))
+                        .foregroundStyle(showHistory ? Color.accentColor : .secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Utilization History")
+            }
 
             let sections = accountSections
             ForEach(Array(sections.enumerated()), id: \.element.id) { index, account in
@@ -1305,6 +1268,11 @@ private struct UtilizationSection: View {
                     resetAt: account.weeklyResetAt,
                     defaultWindowSeconds: 7 * 24 * 60 * 60
                 )
+            }
+
+            if showHistory {
+                Divider().opacity(0.5)
+                UtilizationHistoryChartView(histories: activeAccountHistories)
             }
         }
         .padding(10)
