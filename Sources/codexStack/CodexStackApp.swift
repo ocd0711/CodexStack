@@ -230,19 +230,23 @@ private struct MenuBarPanel: View {
     }
 
     var body: some View {
-        VStack(spacing: 10) {
-            header
-            UtilizationSection(
-                usage: store.usage,
-                accounts: sortedAccounts,
-                progressMode: store.utilizationProgressMode,
-                activeAccountID: activeAccountID
-            )
-            embeddedCostSection
-            projectsSummaryCard
+        VStack(spacing: 0) {
+            VStack(spacing: 10) {
+                header
+                UtilizationSection(
+                    usage: store.usage,
+                    accounts: sortedAccounts,
+                    progressMode: store.utilizationProgressMode,
+                    activeAccountID: activeAccountID
+                )
+                embeddedCostSection
+                projectsSummaryCard
+            }
+            .padding(12)
+            Divider()
             actionsRow
+                .padding(.vertical, 4)
         }
-        .padding(12)
         .frame(minWidth: 360, idealWidth: 390, maxWidth: 420)
         .animation(.easeInOut(duration: 0.12), value: activePane)
         .onDisappear {
@@ -795,35 +799,50 @@ private struct MenuBarPanel: View {
     }
 
     private var actionsRow: some View {
-        HStack {
-            Button("Open Manager") {
+        HStack(spacing: 0) {
+            actionButton("Open", icon: "sidebar.left") {
                 ManagerWindowController.shared.show(with: store)
                 dismiss()
             }
-            Button("Refresh") {
+            actionButton("Refresh", icon: "arrow.clockwise") {
                 store.refresh()
             }
             .disabled(store.isBusy)
-            Button("Sync Prices") {
-                Task {
-                    await ModelPricingSyncService.shared.syncPrices()
-                }
+            actionButton("Sync", icon: "arrow.triangle.2.circlepath") {
+                Task { await ModelPricingSyncService.shared.syncPrices() }
             }
             .disabled(store.isBusy)
-            Button("Settings...") {
+            actionButton("Settings", icon: "gearshape") {
                 activePane = .none
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                    onOpenSettings()
-                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { onOpenSettings() }
                 dismiss()
             }
             Spacer()
-            Button("Quit") {
+            actionButton("Quit", icon: "power", destructive: true) {
                 NSApplication.shared.terminate(nil)
             }
         }
-        .buttonStyle(.bordered)
         .disabled(store.isMutating)
+    }
+
+    private func actionButton(
+        _ label: String,
+        icon: String,
+        destructive: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 14))
+                Text(label)
+                    .font(.system(size: 10))
+            }
+            .foregroundStyle(destructive ? .red : .primary)
+            .frame(minWidth: 52, minHeight: 36)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private var recentProjectLabels: [String] {
