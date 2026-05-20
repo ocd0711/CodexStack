@@ -7,23 +7,35 @@ enum StatusIconRenderer {
     static func makeIcon(
         sessionUsedRatio: Double?,
         weeklyUsedRatio: Double?,
-        progressMode: UtilizationProgressMode
+        progressMode: UtilizationProgressMode,
+        animationPhase: Double? = nil
     ) -> NSImage {
         renderImage {
-            let sessionPercent = displayPercent(from: sessionUsedRatio, progressMode: progressMode)
-            let weeklyPercent = weeklyUsedRatio == nil ? nil : displayPercent(from: weeklyUsedRatio, progressMode: progressMode)
-
             let barWidth = 30
             let barX = 3
             let top = PixelRect(x: barX, y: 19, width: barWidth, height: 12)
             let bottom = PixelRect(x: barX, y: 5, width: barWidth, height: 8)
             let single = PixelRect(x: barX, y: 10, width: barWidth, height: 16)
 
-            if let weeklyPercent {
-                drawCapsule(top, percent: sessionPercent, face: true, alpha: 1)
-                drawCapsule(bottom, percent: weeklyPercent, face: false, alpha: 0.92)
+            if let phase = animationPhase {
+                // Loading animation: cylon sweep on both bars
+                let primary = 5 + 90 * (sin(phase) * 0.5 + 0.5)
+                let secondary = 5 + 90 * (sin(phase + .pi * 0.6) * 0.5 + 0.5)
+                if weeklyUsedRatio != nil {
+                    drawCapsule(top, percent: primary, face: true, alpha: 1)
+                    drawCapsule(bottom, percent: secondary, face: false, alpha: 0.92)
+                } else {
+                    drawCapsule(single, percent: primary, face: true, alpha: 1)
+                }
             } else {
-                drawCapsule(single, percent: sessionPercent, face: true, alpha: 1)
+                let sessionPercent = displayPercent(from: sessionUsedRatio, progressMode: progressMode)
+                let weeklyPercent = weeklyUsedRatio == nil ? nil : displayPercent(from: weeklyUsedRatio, progressMode: progressMode)
+                if let weeklyPercent {
+                    drawCapsule(top, percent: sessionPercent, face: true, alpha: 1)
+                    drawCapsule(bottom, percent: weeklyPercent, face: false, alpha: 0.92)
+                } else {
+                    drawCapsule(single, percent: sessionPercent, face: true, alpha: 1)
+                }
             }
         }
     }

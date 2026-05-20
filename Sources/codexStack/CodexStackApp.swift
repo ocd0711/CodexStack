@@ -13,6 +13,7 @@ struct CodexStackApp: App {
     @StateObject private var store: SessionStore
     @State private var showMenuBarPercentage: Bool
     @State private var launchAtLogin: Bool
+    @State private var cachedStatusBarIcon: NSImage = NSImage()
 
     init() {
         let saved = UserDefaults.standard.string(forKey: Self.codexRootPathDefaultsKey)
@@ -104,7 +105,7 @@ struct CodexStackApp: App {
             .environmentObject(store)
         } label: {
             HStack(spacing: 4) {
-                Image(nsImage: statusBarIcon)
+                Image(nsImage: cachedStatusBarIcon)
                     .resizable()
                     .frame(width: 18, height: 18)
                 if showMenuBarPercentage, let percent = menuBarPercent {
@@ -113,16 +114,48 @@ struct CodexStackApp: App {
                 }
             }
             .accessibilityLabel(menuBarTitle)
+            .onAppear { cachedStatusBarIcon = computeStatusBarIcon() }
+            .onChange(of: iconCacheKey) { _ in
+                if !store.isRefreshing { cachedStatusBarIcon = computeStatusBarIcon() }
+            }
+            .task(id: store.isRefreshing) {
+                guard store.isRefreshing else {
+                    cachedStatusBarIcon = computeStatusBarIcon()
+                    return
+                }
+                var phase = 0.0
+                let nsPerFrame: UInt64 = 1_000_000_000 / 30
+                let key = iconCacheKey
+                while !Task.isCancelled {
+                    cachedStatusBarIcon = StatusIconRenderer.makeIcon(
+                        sessionUsedRatio: key.session,
+                        weeklyUsedRatio: key.weekly,
+                        progressMode: key.mode,
+                        animationPhase: phase
+                    )
+                    phase += 2.7 / 30.0
+                    try? await Task.sleep(nanoseconds: nsPerFrame)
+                }
+            }
         }
         .menuBarExtraStyle(.window)
     }
 
-    private var statusBarIcon: NSImage {
+    private var iconCacheKey: IconCacheKey {
         let activeAccount = store.usage.accounts.first
+        return IconCacheKey(
+            session: activeAccount?.sessionUsedRatio ?? store.usage.sessionUsedRatio,
+            weekly: activeAccount?.weeklyUsedRatio ?? store.usage.weeklyUsedRatio,
+            mode: store.utilizationProgressMode
+        )
+    }
+
+    private func computeStatusBarIcon() -> NSImage {
+        let key = iconCacheKey
         return StatusIconRenderer.makeIcon(
-            sessionUsedRatio: activeAccount?.sessionUsedRatio ?? store.usage.sessionUsedRatio,
-            weeklyUsedRatio: activeAccount?.weeklyUsedRatio ?? store.usage.weeklyUsedRatio,
-            progressMode: store.utilizationProgressMode
+            sessionUsedRatio: key.session,
+            weeklyUsedRatio: key.weekly,
+            progressMode: key.mode
         )
     }
 
@@ -3111,4 +3144,10 @@ enum DialogPresenter {
             )
         )
     }
+}
+
+private struct IconCacheKey: Equatable {
+    let session: Double?
+    let weekly: Double?
+    let mode: UtilizationProgressMode
 }
