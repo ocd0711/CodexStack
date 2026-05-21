@@ -1759,12 +1759,11 @@ final class SettingsWindowController: NSWindowController {
             window.level = .normal
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
-            window.isMovableByWindowBackground = false
+            window.isMovableByWindowBackground = true
             window.toolbarStyle = .unified
             let toolbar = NSToolbar()
             toolbar.showsBaselineSeparator = false
             window.toolbar = toolbar
-            window.backgroundColor = .clear
             window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
             window.setContentSize(contentSize)
             window.minSize = NSSize(width: 640, height: 460)
@@ -1822,6 +1821,7 @@ private struct SettingsWindowView: View {
     @AppStorage("pricingSyncInterval") private var pricingSyncInterval: PricingSyncInterval = .weekly
     @State private var updateAlert: UpdateAlert?
     @State private var isCheckingUpdates = false
+    @State private var isSyncingPrices = false
     @State private var importedAccounts: [ImportedCodexAccountSummary] = AccountCredentialStore.loadSummaries()
     @State private var accountAlert: UpdateAlert?
     @State private var celebrateWeeklyReset: Bool
@@ -1972,18 +1972,24 @@ private struct SettingsWindowView: View {
 
     private var codexPane: some View {
         settingsCard {
-            SettingsLine(title: localized("Codex Directory"), subtitle: localized("Used for session scan, archive, and index reconciliation.")) {
-                VStack(alignment: .trailing, spacing: 8) {
-                    TextField("", text: $currentPath)
+            VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(localized("Codex Directory"))
+                        .font(.callout.weight(.semibold))
+                    Text(localized("Folder where codexStack reads Codex sessions."))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                HStack(spacing: 8) {
+                    TextField("~/codex", text: $currentPath)
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: 300)
-                    HStack(spacing: 8) {
-                        Button(localized("Browse..."), action: chooseDirectory)
-                        Button(localized("Save"), action: savePath)
-                            .keyboardShortcut(.defaultAction)
-                    }
+                    Button(localized("Browse..."), action: chooseDirectory)
+                    Button(localized("Save"), action: savePath)
+                        .keyboardShortcut(.defaultAction)
                 }
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 13)
             SettingsDivider()
             SettingsLine(title: localized("Launch at Login"), subtitle: localized("Open codexStack automatically when you sign in.")) {
                 SettingsSwitch(isOn: $launchAtLogin) {
@@ -2035,9 +2041,15 @@ private struct SettingsWindowView: View {
                             ModelPricingSyncService.shared.syncIfNeeded()
                         }
                     }
-                    Button(localized("Sync Now")) {
-                        Task { await ModelPricingSyncService.shared.syncPrices() }
+                    Button(isSyncingPrices ? localized("Syncing...") : localized("Sync Now")) {
+                        guard !isSyncingPrices else { return }
+                        isSyncingPrices = true
+                        Task {
+                            await ModelPricingSyncService.shared.syncPrices()
+                            isSyncingPrices = false
+                        }
                     }
+                    .disabled(isSyncingPrices)
                 }
             }
         }
@@ -2220,11 +2232,6 @@ private struct SettingsWindowView: View {
 
             sectionTitle("Application")
             settingsCard {
-                SettingsLine(title: localized("Version")) {
-                    Text(appVersionText)
-                        .foregroundStyle(.secondary)
-                }
-                SettingsDivider()
                 SettingsLine(title: localized("Repository"), subtitle: localized("GitHub Releases")) {
                     Button(localized("Open GitHub"), action: openRepository)
                 }
@@ -2245,6 +2252,7 @@ private struct SettingsWindowView: View {
 
     private func settingsCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         VStack(spacing: 0, content: content)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -2268,6 +2276,7 @@ private struct SettingsWindowView: View {
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url {
             currentPath = url.path
+            savePath()
         }
     }
 
@@ -2697,7 +2706,7 @@ private struct SettingsLine<Accessory: View>: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 16) {
+        HStack(alignment: .top, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
                     .font(.callout.weight(.semibold))
@@ -2705,11 +2714,14 @@ private struct SettingsLine<Accessory: View>: View {
                     Text(subtitle)
                         .font(.callout)
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .lineLimit(3)
+                        .allowsTightening(false)
                 }
             }
-            Spacer(minLength: 24)
+            .frame(minWidth: 140, alignment: .leading)
+            Spacer(minLength: 16)
             accessory()
+                .padding(.top, 1)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 13)
@@ -2733,8 +2745,6 @@ private struct SettingsSwitch: View {
             .toggleStyle(.switch)
             .onChange(of: isOn) { _ in onChange() }
             .controlSize(.small)
-        .accessibilityLabel("Show percentage text")
-        .accessibilityValue(isOn ? "On" : "Off")
     }
 }
 
