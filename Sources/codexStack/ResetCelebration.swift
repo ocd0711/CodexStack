@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import QuartzCore
+import UserNotifications
 
 enum ResetCelebrationKind: Sendable {
     case weekly
@@ -17,81 +18,105 @@ enum ResetCelebrationKind: Sendable {
         return "🎊"
     }
 
-    var accent: Color {
-        return Color(nsColor: .systemPurple)
-    }
+    var notificationID: String { "codexstack.celebration.weekly" }
 }
 
 @MainActor
 final class ResetCelebrationController {
     static let shared = ResetCelebrationController()
 
-    private var window: NSWindow?
+    private var confettiWindow: NSWindow?
     private var dismissTask: Task<Void, Never>?
+    private var mousePollTask: Task<Void, Never>?
 
     private init() {}
 
     func present(kind: ResetCelebrationKind) {
         dismissTask?.cancel()
-        dismissTask = nil
+        mousePollTask?.cancel()
+
+        sendSystemNotification(kind: kind)
 
         let screen = activeScreen() ?? NSScreen.main
         guard let screen else { return }
-
-        let frame = screen.frame
-        let window: NSWindow
-        if let existing = self.window {
-            window = existing
-            window.setFrame(frame, display: false)
-            window.alphaValue = 1
-        } else {
-            window = NSWindow(
-                contentRect: frame,
-                styleMask: [.borderless],
-                backing: .buffered,
-                defer: false,
-                screen: screen
-            )
-            window.isOpaque = false
-            window.backgroundColor = .clear
-            window.hasShadow = false
-            window.ignoresMouseEvents = false
-            window.level = .floating
-            window.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
-            self.window = window
-        }
-
-        let view = ResetCelebrationView(kind: kind) { [weak self] in
-            self?.dismiss()
-        }
-        let hosting = NSHostingView(rootView: view)
-        hosting.frame = NSRect(origin: .zero, size: frame.size)
-        hosting.autoresizingMask = [.width, .height]
-        window.contentView = hosting
-
-        window.orderFrontRegardless()
-        window.makeKey()
+        showConfetti(screen: screen)
 
         dismissTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 4_200_000_000)
+            try? await Task.sleep(nanoseconds: 3_500_000_000)
             guard !Task.isCancelled else { return }
-            await MainActor.run { self?.dismiss() }
+            await MainActor.run { self?.dismissConfetti() }
+        }
+
+        // Dismiss confetti on mouse movement after 300ms grace period
+        let initialLocation = NSEvent.mouseLocation
+        mousePollTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 50_000_000) // 20 Hz
+                let p = NSEvent.mouseLocation
+                let dx = p.x - initialLocation.x
+                let dy = p.y - initialLocation.y
+                if dx * dx + dy * dy > 25 {
+                    await MainActor.run { [weak self] in self?.dismissConfetti() }
+                    return
+                }
+            }
         }
     }
 
-    func dismiss() {
+    // MARK: - System notification
+
+    private func sendSystemNotification(kind: ResetCelebrationKind) {
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        let content = UNMutableNotificationContent()
+        content.title = kind.emoji + " " + kind.title
+        content.body = kind.subtitle
+        content.sound = .default
+        let request = UNNotificationRequest(identifier: kind.notificationID, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
+    }
+
+    // MARK: - Confetti window
+
+    private func showConfetti(screen: NSScreen) {
+        let frame = screen.frame
+        if let existing = confettiWindow {
+            existing.setFrame(frame, display: false)
+            existing.alphaValue = 1
+            (existing.contentView as? NSHostingView<ConfettiNSViewRepresentable>)?.rootView = ConfettiNSViewRepresentable()
+            existing.orderFrontRegardless()
+            return
+        }
+        let win = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false, screen: screen)
+        win.isOpaque = false
+        win.backgroundColor = .clear
+        win.hasShadow = false
+        win.ignoresMouseEvents = true
+        win.level = .floating
+        win.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
+        let hosting = NSHostingView(rootView: ConfettiNSViewRepresentable())
+        hosting.frame = NSRect(origin: .zero, size: frame.size)
+        hosting.autoresizingMask = [.width, .height]
+        win.contentView = hosting
+        confettiWindow = win
+        win.orderFrontRegardless()
+    }
+
+    private func dismissConfetti() {
         dismissTask?.cancel()
         dismissTask = nil
-        if let win = window {
-            NSAnimationContext.runAnimationGroup({ context in
-                context.duration = 0.4
-                win.animator().alphaValue = 0
-            }, completionHandler: {
-                win.orderOut(nil)
-                win.contentView = nil
-                win.alphaValue = 1
-            })
-        }
+        mousePollTask?.cancel()
+        mousePollTask = nil
+        guard let win = confettiWindow, win.isVisible else { return }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.4
+            win.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            win.orderOut(nil)
+            win.contentView = nil
+            win.alphaValue = 1
+            Task { @MainActor [weak self] in self?.confettiWindow = nil }
+        })
     }
 
     private func activeScreen() -> NSScreen? {
@@ -100,78 +125,7 @@ final class ResetCelebrationController {
     }
 }
 
-private struct ResetCelebrationView: View {
-    let kind: ResetCelebrationKind
-    let onDismiss: () -> Void
-
-    @State private var appeared = false
-    @State private var emojiScale: CGFloat = 0.3
-    @State private var emojiRotation: Double = -30
-
-    var body: some View {
-        ZStack {
-            // Subtle backdrop dimming
-            Color.black.opacity(appeared ? 0.3 : 0)
-                .ignoresSafeArea()
-                .onTapGesture { onDismiss() }
-
-            // High-performance physics confetti layer
-            ConfettiNSViewRepresentable()
-                .ignoresSafeArea()
-                .allowsHitTesting(false)
-
-            // Central beautifully styled card
-            VStack(spacing: 16) {
-                Text(kind.emoji)
-                    .font(.system(size: 84))
-                    .scaleEffect(emojiScale)
-                    .rotationEffect(.degrees(emojiRotation))
-                    .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
-                    .padding(.bottom, 6)
-                
-                VStack(spacing: 6) {
-                    Text(kind.title)
-                        .font(.system(size: 32, weight: .bold, design: .rounded))
-                        .foregroundStyle(.primary)
-                    
-                    Text(kind.subtitle)
-                        .font(.system(size: 16, weight: .medium, design: .rounded))
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-            }
-            .padding(.horizontal, 40)
-            .padding(.top, 32)
-            .padding(.bottom, 36)
-            .background(
-                RoundedRectangle(cornerRadius: 32, style: .continuous)
-                    .fill(.regularMaterial)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 32, style: .continuous)
-                            .stroke(.white.opacity(0.2), lineWidth: 1)
-                    )
-            )
-            .shadow(color: .black.opacity(0.25), radius: 40, y: 20)
-            .background(
-                kind.accent
-                    .opacity(appeared ? 0.15 : 0)
-                    .blur(radius: 60)
-                    .scaleEffect(appeared ? 1.2 : 0.8)
-            )
-            .scaleEffect(appeared ? 1 : 0.9)
-            .opacity(appeared ? 1 : 0)
-        }
-        .onAppear {
-            withAnimation(.spring(response: 0.5, dampingFraction: 0.75)) {
-                appeared = true
-            }
-            withAnimation(.spring(response: 0.6, dampingFraction: 0.5).delay(0.1)) {
-                emojiScale = 1.0
-                emojiRotation = 0
-            }
-        }
-    }
-}
+// MARK: - Confetti
 
 private struct ConfettiNSViewRepresentable: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
@@ -226,8 +180,8 @@ private class ConfettiEmitterView: NSView {
                 cell.lifetime = 8.0
                 cell.velocity = 250
                 cell.velocityRange = 100
-                cell.emissionLongitude = .pi / 2 // pointing down
-                cell.emissionRange = .pi // 180 degree spread
+                cell.emissionLongitude = .pi / 2
+                cell.emissionRange = .pi
                 cell.spin = 3
                 cell.spinRange = 5
                 cell.scale = 0.5
@@ -242,7 +196,6 @@ private class ConfettiEmitterView: NSView {
         emitter.emitterCells = cells
         emitter.beginTime = CACurrentMediaTime()
 
-        // Stop birthing after a burst duration
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             self.emitter.birthRate = 0
         }
