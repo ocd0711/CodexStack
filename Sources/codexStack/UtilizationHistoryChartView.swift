@@ -43,7 +43,8 @@ struct UtilizationHistoryChartView: View {
 
     let histories: [UtilizationSeriesHistory]
 
-    @State private var selectedSeriesName: UtilizationSeriesName?
+    @State private var selectedSeriesName: UtilizationSeriesName? =
+        UtilizationSeriesName(rawValue: UserDefaults.standard.string(forKey: "utilization.selectedSeries") ?? "")
     @State private var selectedPointID: Date?
 
     private var visibleSeries: [UtilizationSeriesHistory] {
@@ -69,7 +70,11 @@ struct UtilizationHistoryChartView: View {
                 Picker(
                     selection: Binding(
                         get: { current?.name ?? .session },
-                        set: { self.selectedSeriesName = $0; self.selectedPointID = nil }
+                        set: {
+                            self.selectedSeriesName = $0
+                            self.selectedPointID = nil
+                            UserDefaults.standard.set($0.rawValue, forKey: "utilization.selectedSeries")
+                        }
                     ),
                     label: EmptyView()
                 ) {
@@ -134,6 +139,7 @@ struct UtilizationHistoryChartView: View {
             guard let first = series.first else { return }
             guard !series.contains(where: { $0.name == selectedSeriesName }) else { return }
             selectedSeriesName = first.name
+            UserDefaults.standard.set(first.name.rawValue, forKey: "utilization.selectedSeries")
             selectedPointID = nil
         }
     }

@@ -241,6 +241,7 @@ private enum MenuDrilldownPane {
     case none
     case cost
     case projects
+    case utilization
 }
 
 private struct MenuBarPanel: View {
@@ -251,6 +252,7 @@ private struct MenuBarPanel: View {
     @State private var hoveredCostDayID: TimeInterval?
     @State private var hoverCostCard = false
     @State private var hoverProjectsCard = false
+    @State private var hoverUtilCard = false
     @State private var hoverDetailPane = false
     @State private var closePaneTask: Task<Void, Never>?
     @AppStorage("accountsSortOption") private var accountsSortRaw: String = AccountsSortOption.importedNewest.rawValue
@@ -278,13 +280,7 @@ private struct MenuBarPanel: View {
         VStack(spacing: 0) {
             VStack(spacing: 10) {
                 header
-                UtilizationSection(
-                    usage: store.usage,
-                    accounts: sortedAccounts,
-                    progressMode: store.utilizationProgressMode,
-                    activeAccountID: activeAccountID,
-                    utilizationHistories: store.utilizationHistories
-                )
+                utilizationCard
                 embeddedCostSection
                 projectsSummaryCard
             }
@@ -537,8 +533,11 @@ private struct MenuBarPanel: View {
             .padding(.horizontal, 14)
             .padding(.bottom, 10)
         }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(
+            hoverCostCard ? Color.accentColor.opacity(0.12) : .clear,
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .popover(isPresented: isCostPopoverPresented, attachmentAnchor: .rect(.bounds), arrowEdge: .trailing) {
             costDetailPane
                 .frame(width: costPopoverWidth)
@@ -611,9 +610,11 @@ private struct MenuBarPanel: View {
                 }
             }
             .padding(10)
-            .background(.regularMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(
+                hoverProjectsCard ? Color.accentColor.opacity(0.12) : .clear,
+                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
         .popover(isPresented: isProjectsPopoverPresented, attachmentAnchor: .rect(.bounds), arrowEdge: .trailing) {
@@ -1076,7 +1077,7 @@ private struct MenuBarPanel: View {
             try? await Task.sleep(nanoseconds: 180_000_000)
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                if !hoverCostCard && !hoverProjectsCard && !hoverDetailPane {
+                if !hoverCostCard && !hoverProjectsCard && !hoverUtilCard && !hoverDetailPane {
                     activePane = .none
                 }
             }
@@ -1110,6 +1111,66 @@ private struct MenuBarPanel: View {
                 }
             }
         )
+    }
+
+    private var isUtilPopoverPresented: Binding<Bool> {
+        Binding(
+            get: { activePane == .utilization },
+            set: { isPresented in
+                if !isPresented, activePane == .utilization {
+                    hoverDetailPane = false
+                    activePane = .none
+                }
+            }
+        )
+    }
+
+    private var activeAccountsForInline: [UsageAccountSnapshot] {
+        guard !sortedAccounts.isEmpty else { return [] }
+        if let activeID = activeAccountID,
+           let active = sortedAccounts.first(where: { $0.id == activeID }) {
+            return [active]
+        }
+        return [sortedAccounts[0]]
+    }
+
+    private var utilizationCard: some View {
+        UtilizationSection(
+            usage: store.usage,
+            accounts: activeAccountsForInline,
+            progressMode: store.utilizationProgressMode,
+            activeAccountID: activeAccountID,
+            utilizationHistories: store.utilizationHistories
+        )
+        .background(
+            hoverUtilCard ? Color.accentColor.opacity(0.12) : .clear,
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .popover(isPresented: isUtilPopoverPresented, attachmentAnchor: .rect(.bounds), arrowEdge: .trailing) {
+            UtilizationSection(
+                usage: store.usage,
+                accounts: sortedAccounts,
+                progressMode: store.utilizationProgressMode,
+                activeAccountID: activeAccountID,
+                utilizationHistories: store.utilizationHistories,
+                showHistoryToggle: true
+            )
+            .frame(width: 320)
+            .onHover { hovering in
+                hoverDetailPane = hovering
+                if hovering { cancelClosePaneTask() } else { scheduleClosePaneIfNeeded() }
+            }
+        }
+        .onHover { hovering in
+            hoverUtilCard = hovering
+            if hovering {
+                cancelClosePaneTask()
+                activePane = .utilization
+            } else {
+                scheduleClosePaneIfNeeded()
+            }
+        }
     }
 }
 
@@ -1244,8 +1305,14 @@ private struct UtilizationSection: View {
     let progressMode: UtilizationProgressMode
     let activeAccountID: String?
     let utilizationHistories: [String: [UtilizationSeriesHistory]]
+    var showHistoryToggle: Bool = false
 
-    @State private var showHistory = false
+    @State private var showHistory: Bool = UserDefaults.standard.bool(forKey: "utilization.showHistory")
+
+    private var activeAccountHistories: [UtilizationSeriesHistory] {
+        let key = activeAccountID ?? accountSections.first?.id ?? ""
+        return utilizationHistories[key] ?? []
+    }
 
     private var accountSections: [UsageAccountSnapshot] {
         if !accounts.isEmpty {
@@ -1271,29 +1338,47 @@ private struct UtilizationSection: View {
         return [fallback]
     }
 
-    private var activeAccountHistories: [UtilizationSeriesHistory] {
-        let key = activeAccountID ?? accountSections.first?.id ?? ""
-        return utilizationHistories[key] ?? []
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Subscription Utilization")
                     .font(.headline)
                 Spacer()
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { showHistory.toggle() }
-                } label: {
-                    Image(systemName: showHistory ? "chart.bar.fill" : "chart.bar")
-                        .font(.system(size: 13))
-                        .foregroundStyle(showHistory ? Color.accentColor : .secondary)
+                if showHistoryToggle {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { showHistory.toggle() }
+                        UserDefaults.standard.set(showHistory, forKey: "utilization.showHistory")
+                    } label: {
+                        Image(systemName: showHistory ? "chart.bar.fill" : "chart.bar")
+                            .font(.system(size: 13))
+                            .foregroundStyle(showHistory ? Color.accentColor : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Utilization History")
                 }
-                .buttonStyle(.plain)
-                .help("Utilization History")
             }
 
             let sections = accountSections
+            if sections.count > 2 {
+                ScrollView(.vertical) {
+                    accountSectionsList(sections)
+                }
+                .frame(maxHeight: 280)
+            } else {
+                accountSectionsList(sections)
+            }
+
+            if showHistoryToggle && showHistory {
+                Divider().opacity(0.5)
+                UtilizationHistoryChartView(histories: activeAccountHistories)
+            }
+        }
+        .padding(10)
+    }
+
+    @ViewBuilder
+    private func accountSectionsList(_ sections: [UsageAccountSnapshot]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(sections.enumerated()), id: \.element.id) { index, account in
                 if index > 0 {
                     Divider().opacity(0.5)
@@ -1314,15 +1399,7 @@ private struct UtilizationSection: View {
                     defaultWindowSeconds: 7 * 24 * 60 * 60
                 )
             }
-
-            if showHistory {
-                Divider().opacity(0.5)
-                UtilizationHistoryChartView(histories: activeAccountHistories)
-            }
         }
-        .padding(10)
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     @ViewBuilder
