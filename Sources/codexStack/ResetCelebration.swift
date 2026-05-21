@@ -67,13 +67,16 @@ final class ResetCelebrationController {
     // MARK: - System notification
 
     private func sendSystemNotification(kind: ResetCelebrationKind) {
-        guard Bundle.main.bundleIdentifier != nil else { return }
-        let content = UNMutableNotificationContent()
-        content.title = kind.emoji + " " + kind.title
-        content.body = kind.subtitle
-        content.sound = .default
-        let request = UNNotificationRequest(identifier: kind.notificationID, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request)
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { return }
+            let content = UNMutableNotificationContent()
+            content.title = kind.emoji + " " + kind.title
+            content.body = kind.subtitle
+            content.sound = .default
+            let request = UNNotificationRequest(identifier: kind.notificationID, content: content, trigger: nil)
+            center.add(request)
+        }
     }
 
     // MARK: - Confetti window

@@ -18,7 +18,13 @@ let package = Package(
                 .process("Resources")
             ],
             linkerSettings: [
-                .linkedLibrary("sqlite3")
+                .linkedLibrary("sqlite3"),
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "Sources/codexStack/Info.plist"
+                ])
             ]
         )
     ]

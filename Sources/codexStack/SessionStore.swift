@@ -77,9 +77,7 @@ final class SessionStore: ObservableObject {
         refresh()
         scheduleAutoRefresh()
         
-        if Bundle.main.bundleIdentifier != nil {
-            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
-        }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
         
         NotificationCenter.default.addObserver(forName: .pricingUpdated, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
@@ -244,7 +242,7 @@ final class SessionStore: ObservableObject {
                         try syncToAuthJSON(accountID: bestAccount.id)
                         setPreferredAccountID(bestAccount.id)
                         
-                        if autoSwitchNotificationEnabled && Bundle.main.bundleIdentifier != nil {
+                        if autoSwitchNotificationEnabled {
                             let content = UNMutableNotificationContent()
                             content.title = NSLocalizedString("CodexStack Auto-Switch", bundle: .module, comment: "")
                             let maxPct = max(sessionPct, weeklyPct)
