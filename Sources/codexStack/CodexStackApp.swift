@@ -1650,7 +1650,7 @@ final class ManagerWindowController: NSWindowController, NSWindowDelegate {
 @MainActor
 final class SettingsWindowController: NSWindowController {
     static let shared = SettingsWindowController()
-    private let contentSize = NSSize(width: 820, height: 560)
+    private let contentSize = NSSize(width: 720, height: 520)
     private var settingsHostingController: NSHostingController<SettingsWindowView>?
 
     private init() {
@@ -1767,7 +1767,7 @@ final class SettingsWindowController: NSWindowController {
             window.backgroundColor = .clear
             window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
             window.setContentSize(contentSize)
-            window.minSize = NSSize(width: 760, height: 500)
+            window.minSize = NSSize(width: 640, height: 460)
             self.window = window
         } else {
             window?.contentViewController = hostingController
@@ -1783,39 +1783,37 @@ final class SettingsWindowController: NSWindowController {
     }
 }
 
-private enum SettingsPane: String, CaseIterable, Identifiable {
-    case general
-    case accounts
+private enum SettingsNavItem: String, Hashable {
+    case codex, menuBar, celebrations
+    case importedAccounts, autoSwitch
     case about
 
-    var id: String { rawValue }
-
-    var titleKey: String {
+    var title: String {
         switch self {
-        case .general:
-            return "General"
-        case .accounts:
-            return "Accounts"
-        case .about:
-            return "About"
+        case .codex: return "Codex"
+        case .menuBar: return "Menu Bar"
+        case .celebrations: return "Celebrations"
+        case .importedAccounts: return "Imported Accounts"
+        case .autoSwitch: return "Auto-Switch"
+        case .about: return "About"
         }
     }
 
     var symbolName: String {
         switch self {
-        case .general:
-            return "gearshape"
-        case .accounts:
-            return "person.crop.circle.badge.plus"
-        case .about:
-            return "info.circle"
+        case .codex: return "folder"
+        case .menuBar: return "menubar.rectangle"
+        case .celebrations: return "party.popper"
+        case .importedAccounts: return "person.crop.circle.badge.plus"
+        case .autoSwitch: return "arrow.triangle.2.circlepath"
+        case .about: return "info.circle"
         }
     }
 }
 
 @MainActor
 private struct SettingsWindowView: View {
-    @State private var selectedPane: SettingsPane = .general
+    @State private var selectedItem: SettingsNavItem? = .codex
     @State private var currentPath: String
     @State private var progressMode: UtilizationProgressMode
     @State private var showMenuBarPercentage: Bool
@@ -1905,20 +1903,54 @@ private struct SettingsWindowView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            headerBar
-            Divider()
-            HStack(spacing: 0) {
-                sidebar
-                    .frame(width: 220)
-                Divider()
-                contentPane
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+        NavigationSplitView {
+            List(selection: $selectedItem) {
+                Section(localized("General")) {
+                    Label(localized("Codex"), systemImage: SettingsNavItem.codex.symbolName)
+                        .tag(SettingsNavItem.codex)
+                    Label(localized("Menu Bar"), systemImage: SettingsNavItem.menuBar.symbolName)
+                        .tag(SettingsNavItem.menuBar)
+                    Label(localized("Celebrations"), systemImage: SettingsNavItem.celebrations.symbolName)
+                        .tag(SettingsNavItem.celebrations)
+                }
+                Section(localized("Accounts")) {
+                    Label(localized("Imported Accounts"), systemImage: SettingsNavItem.importedAccounts.symbolName)
+                        .tag(SettingsNavItem.importedAccounts)
+                    Label(localized("Auto-Switch"), systemImage: SettingsNavItem.autoSwitch.symbolName)
+                        .tag(SettingsNavItem.autoSwitch)
+                }
+                Section {
+                    Label(localized("About"), systemImage: SettingsNavItem.about.symbolName)
+                        .tag(SettingsNavItem.about)
+                }
             }
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 160, ideal: 190)
+        } detail: {
+            let current = selectedItem ?? .codex
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text(localized(current.title))
+                        .font(.title.weight(.semibold))
+                        .padding(.bottom, 2)
+                    switch current {
+                    case .codex: codexPane
+                    case .menuBar: menuBarPane
+                    case .celebrations: celebrationsPane
+                    case .importedAccounts: importedAccountsPane
+                    case .autoSwitch: autoSwitchPane
+                    case .about: aboutPane
+                    }
+                }
+                .frame(maxWidth: 560, alignment: .leading)
+                .padding(.horizontal, 36)
+                .padding(.vertical, 30)
+                .frame(maxWidth: .infinity, alignment: .center)
+            }
+            .scrollContentBackground(.hidden)
+            .navigationTitle(localized(current.title))
         }
-        .ignoresSafeArea(.all, edges: .top)
-        .frame(minWidth: 760, minHeight: 500)
-        .background(settingsWindowBackground.ignoresSafeArea())
+        .frame(minWidth: 640, minHeight: 460)
         .alert(item: $updateAlert) { alert in
             Alert(
                 title: Text(alert.title),
@@ -1938,186 +1970,103 @@ private struct SettingsWindowView: View {
         }
     }
 
-    private var headerBar: some View {
-        HStack(spacing: 10) {
-            Image(nsImage: codexStackLogoImage(progressMode: progressMode))
-                .resizable()
-                .frame(width: 24, height: 24)
-            Text(localized("Settings"))
-                .font(.system(size: 15, weight: .semibold))
-            Spacer()
-        }
-        .padding(.leading, 80)
-        .padding(.trailing, 18)
-        .frame(height: 52)
-        .background(Color.clear)
-        .overlay(alignment: .bottom) {
-            Divider()
+    private var codexPane: some View {
+        settingsCard {
+            SettingsLine(title: localized("Codex Directory"), subtitle: localized("Used for session scan, archive, and index reconciliation.")) {
+                VStack(alignment: .trailing, spacing: 8) {
+                    TextField("", text: $currentPath)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 300)
+                    HStack(spacing: 8) {
+                        Button(localized("Browse..."), action: chooseDirectory)
+                        Button(localized("Save"), action: savePath)
+                            .keyboardShortcut(.defaultAction)
+                    }
+                }
+            }
+            SettingsDivider()
+            SettingsLine(title: localized("Launch at Login"), subtitle: localized("Open codexStack automatically when you sign in.")) {
+                SettingsSwitch(isOn: $launchAtLogin) {
+                    updateLaunchAtLogin()
+                }
+            }
         }
     }
 
-    private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(SettingsPane.allCases) { pane in
-                Button {
-                    selectedPane = pane
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: pane.symbolName)
-                            .frame(width: 18)
-                        Text(localized(pane.titleKey))
-                        Spacer()
+    private var menuBarPane: some View {
+        settingsCard {
+            SettingsLine(title: localized("Progress Bar"), subtitle: localized("Controls whether usage bars show used or remaining quota.")) {
+                Picker("", selection: $progressMode) {
+                    ForEach(UtilizationProgressMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
                     }
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(selectedPane == pane ? Color.accentColor : Color.secondary)
-                    .padding(.horizontal, 10)
-                    .frame(height: 32)
-                    .background {
-                        if selectedPane == pane {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(Color.accentColor.opacity(0.16))
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 210)
+                .onChange(of: progressMode) { _ in applyNonPathSettings() }
+            }
+            SettingsDivider()
+            SettingsLine(title: localized("Show percentage text"), subtitle: localized("Display the quota percentage next to the menu bar icon.")) {
+                SettingsSwitch(isOn: $showMenuBarPercentage) {
+                    applyNonPathSettings()
+                }
+            }
+            SettingsDivider()
+            SettingsLine(title: localized("Auto refresh"), subtitle: localized("Refresh usage and sessions in the background at this interval.")) {
+                Picker("", selection: $refreshInterval) {
+                    ForEach(RefreshInterval.allCases) { interval in
+                        Text(interval.label).tag(interval)
+                    }
+                }
+                .frame(width: 180)
+                .onChange(of: refreshInterval) { _ in applyNonPathSettings() }
+            }
+            SettingsDivider()
+            SettingsLine(title: localized("Sync Model Prices"), subtitle: localized("Automatically download latest model prices from LiteLLM (BerriAI).")) {
+                HStack(spacing: 8) {
+                    Picker("", selection: $pricingSyncInterval) {
+                        ForEach(PricingSyncInterval.allCases) { interval in
+                            Text(localized(interval.label)).tag(interval)
                         }
                     }
-                }
-                .buttonStyle(.plain)
-            }
-            Spacer()
-        }
-        .padding(.horizontal, 14)
-        .padding(.top, 18)
-        .background(settingsSidebarBackground)
-    }
-
-    @ViewBuilder
-    private var contentPane: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Text(localized(selectedPane.titleKey))
-                    .font(.title.weight(.semibold))
-                    .padding(.bottom, 2)
-                switch selectedPane {
-                case .general:
-                    generalPane
-                case .accounts:
-                    accountsPane
-                case .about:
-                    aboutPane
+                    .frame(width: 110)
+                    .onChange(of: pricingSyncInterval) { newValue in
+                        if newValue != .never {
+                            ModelPricingSyncService.shared.syncIfNeeded()
+                        }
+                    }
+                    Button(localized("Sync Now")) {
+                        Task { await ModelPricingSyncService.shared.syncPrices() }
+                    }
                 }
             }
-            .frame(maxWidth: 560, alignment: .leading)
-            .padding(.horizontal, 36)
-            .padding(.vertical, 30)
-            .frame(maxWidth: .infinity, alignment: .center)
         }
-        .scrollContentBackground(.hidden)
-        .clipped()
     }
 
-    private var generalPane: some View {
+    private var celebrationsPane: some View {
+        settingsCard {
+            SettingsLine(
+                title: localized("Weekly Reset"),
+                subtitle: localized("Play a full-screen confetti animation when the weekly quota resets.")
+            ) {
+                SettingsSwitch(isOn: $celebrateWeeklyReset) {
+                    onCelebrationChanged(celebrateWeeklyReset)
+                }
+            }
+            SettingsDivider()
+            SettingsLine(
+                title: localized("Preview"),
+                subtitle: localized("Test the animation on the active screen.")
+            ) {
+                Button(localized("Test Animation")) {
+                    ResetCelebrationController.shared.present(kind: .weekly)
+                }
+            }
+        }
+    }
+
+    private var importedAccountsPane: some View {
         VStack(alignment: .leading, spacing: 18) {
-            sectionTitle("Codex")
-            settingsCard {
-                SettingsLine(title: localized("Codex Directory"), subtitle: localized("Used for session scan, archive, and index reconciliation.")) {
-                    VStack(alignment: .trailing, spacing: 8) {
-                        TextField("", text: $currentPath)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 300)
-                        HStack(spacing: 8) {
-                            Button(localized("Browse..."), action: chooseDirectory)
-                            Button(localized("Save"), action: savePath)
-                                .keyboardShortcut(.defaultAction)
-                        }
-                    }
-                }
-                SettingsDivider()
-                SettingsLine(title: localized("Launch at Login"), subtitle: localized("Open codexStack automatically when you sign in.")) {
-                    SettingsSwitch(isOn: $launchAtLogin) {
-                        updateLaunchAtLogin()
-                    }
-                }
-            }
-
-            sectionTitle("Menu Bar")
-            settingsCard {
-                SettingsLine(title: localized("Progress Bar"), subtitle: localized("Controls whether usage bars show used or remaining quota.")) {
-                    Picker("", selection: $progressMode) {
-                        ForEach(UtilizationProgressMode.allCases) { mode in
-                            Text(mode.label).tag(mode)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 210)
-                    .onChange(of: progressMode) { _ in applyNonPathSettings() }
-                }
-                SettingsDivider()
-                SettingsLine(title: localized("Show percentage text"), subtitle: localized("Display the quota percentage next to the menu bar icon.")) {
-                    SettingsSwitch(isOn: $showMenuBarPercentage) {
-                        applyNonPathSettings()
-                    }
-                }
-                SettingsDivider()
-                SettingsLine(title: localized("Auto refresh"), subtitle: localized("Refresh usage and sessions in the background at this interval.")) {
-                    Picker("", selection: $refreshInterval) {
-                        ForEach(RefreshInterval.allCases) { interval in
-                            Text(interval.label).tag(interval)
-                        }
-                    }
-                    .frame(width: 180)
-                    .onChange(of: refreshInterval) { _ in applyNonPathSettings() }
-                }
-                SettingsDivider()
-                SettingsLine(title: localized("Sync Model Prices"), subtitle: localized("Automatically download latest model prices from LiteLLM (BerriAI).")) {
-                    HStack(spacing: 8) {
-                        Picker("", selection: $pricingSyncInterval) {
-                            ForEach(PricingSyncInterval.allCases) { interval in
-                                Text(localized(interval.label)).tag(interval)
-                            }
-                        }
-                        .frame(width: 110)
-                        .onChange(of: pricingSyncInterval) { newValue in
-                            if newValue != .never {
-                                ModelPricingSyncService.shared.syncIfNeeded()
-                            }
-                        }
-                        
-                        Button(localized("Sync Now")) {
-                            Task {
-                                await ModelPricingSyncService.shared.syncPrices()
-                            }
-                        }
-                    }
-                }
-            }
-
-            sectionTitle("Celebrations")
-            settingsCard {
-
-                SettingsLine(
-                    title: localized("Weekly Reset"),
-                    subtitle: localized("Play a full-screen confetti animation when the weekly quota resets.")
-                ) {
-                    SettingsSwitch(isOn: $celebrateWeeklyReset) {
-                        onCelebrationChanged(celebrateWeeklyReset)
-                    }
-                }
-                SettingsDivider()
-                SettingsLine(
-                    title: localized("Preview"),
-                    subtitle: localized("Test the animation on the active screen.")
-                ) {
-                    HStack(spacing: 8) {
-                        Button(localized("Test Animation")) {
-                            ResetCelebrationController.shared.present(kind: .weekly)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private var accountsPane: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            sectionTitle("Imported Accounts")
             settingsCard {
                 SettingsLine(
                     title: localized("Add Account"),
@@ -2149,80 +2098,13 @@ private struct SettingsWindowView: View {
                         }
                     }
                     SettingsDivider()
-                    if !isOfficialLogin {
-                        HStack(spacing: 8) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.yellow)
-                            Text(localized("Auto-Switch is disabled because a custom provider is active."))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                        }
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 16)
-                        .background(Color.yellow.opacity(0.1))
-                        SettingsDivider()
-                    }
-                    Group {
-                        SettingsLine(
-                            title: localized("Auto-Switch Accounts"),
-                            subtitle: localized("Automatically switch to the account with the lowest usage when the current account reaches a specified percentage limit.")
-                        ) {
-                            SettingsSwitch(isOn: $autoSwitchEnabled) {
-                                onAutoSwitchChanged(autoSwitchEnabled, autoSwitchSessionThreshold, autoSwitchWeeklyThreshold, autoSwitchNotificationEnabled)
-                            }
-                        }
-                        if autoSwitchEnabled {
-                            SettingsDivider()
-                            SettingsLine(
-                                title: localized("Session Limit Threshold"),
-                                subtitle: localized("Switch when the current account's 5h session limit reaches this percentage.")
-                            ) {
-                                HStack {
-                                    Slider(value: $autoSwitchSessionThreshold, in: 1...100) { _ in
-                                        onAutoSwitchChanged(autoSwitchEnabled, autoSwitchSessionThreshold, autoSwitchWeeklyThreshold, autoSwitchNotificationEnabled)
-                                    }
-                                    .frame(width: 150)
-                                    Text("\(Int(autoSwitchSessionThreshold))%")
-                                        .frame(width: 40, alignment: .trailing)
-                                }
-                            }
-                            SettingsDivider()
-                            SettingsLine(
-                                title: localized("Weekly Limit Threshold"),
-                                subtitle: localized("Switch when the current account's weekly limit reaches this percentage.")
-                            ) {
-                                HStack {
-                                    Slider(value: $autoSwitchWeeklyThreshold, in: 1...100) { _ in
-                                        onAutoSwitchChanged(autoSwitchEnabled, autoSwitchSessionThreshold, autoSwitchWeeklyThreshold, autoSwitchNotificationEnabled)
-                                    }
-                                    .frame(width: 150)
-                                    Text("\(Int(autoSwitchWeeklyThreshold))%")
-                                        .frame(width: 40, alignment: .trailing)
-                                }
-                            }
-                            SettingsDivider()
-                            SettingsLine(
-                                title: localized("Auto-Switch Notifications"),
-                                subtitle: localized("Show a macOS notification when an automatic switch occurs.")
-                            ) {
-                                SettingsSwitch(isOn: $autoSwitchNotificationEnabled) {
-                                    onAutoSwitchChanged(autoSwitchEnabled, autoSwitchSessionThreshold, autoSwitchWeeklyThreshold, autoSwitchNotificationEnabled)
-                                }
-                            }
-                        }
-                    }
-                    .disabled(!isOfficialLogin)
-                    .opacity(isOfficialLogin ? 1.0 : 0.5)
-                    SettingsDivider()
                     VStack(spacing: 0) {
                         let rows = sortedImportedAccounts
                         let isManual = accountsSortOption == .manual
                         ForEach(Array(rows.enumerated()), id: \.element.id) { index, account in
                             if index > 0 {
                                 ZStack {
-                                    Divider()
-                                        .padding(.horizontal, 16)
+                                    Divider().padding(.horizontal, 16)
                                     if isManual {
                                         AccountInsertionLine { droppedID in
                                             moveAccount(draggedID: droppedID, before: account.id)
@@ -2244,11 +2126,80 @@ private struct SettingsWindowView: View {
                     }
                 }
             }
-
             Text(localized("Imported credentials are stored locally and used only to query ChatGPT usage windows."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 4)
+        }
+    }
+
+    private var autoSwitchPane: some View {
+        settingsCard {
+            if !isOfficialLogin {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.yellow)
+                    Text(localized("Auto-Switch is disabled because a custom provider is active."))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.vertical, 6)
+                .padding(.horizontal, 16)
+                .background(Color.yellow.opacity(0.1))
+                SettingsDivider()
+            }
+            Group {
+                SettingsLine(
+                    title: localized("Auto-Switch Accounts"),
+                    subtitle: localized("Automatically switch to the account with the lowest usage when the current account reaches a specified percentage limit.")
+                ) {
+                    SettingsSwitch(isOn: $autoSwitchEnabled) {
+                        onAutoSwitchChanged(autoSwitchEnabled, autoSwitchSessionThreshold, autoSwitchWeeklyThreshold, autoSwitchNotificationEnabled)
+                    }
+                }
+                if autoSwitchEnabled {
+                    SettingsDivider()
+                    SettingsLine(
+                        title: localized("Session Limit Threshold"),
+                        subtitle: localized("Switch when the current account's 5h session limit reaches this percentage.")
+                    ) {
+                        HStack {
+                            Slider(value: $autoSwitchSessionThreshold, in: 1...100) { _ in
+                                onAutoSwitchChanged(autoSwitchEnabled, autoSwitchSessionThreshold, autoSwitchWeeklyThreshold, autoSwitchNotificationEnabled)
+                            }
+                            .frame(width: 150)
+                            Text("\(Int(autoSwitchSessionThreshold))%")
+                                .frame(width: 40, alignment: .trailing)
+                        }
+                    }
+                    SettingsDivider()
+                    SettingsLine(
+                        title: localized("Weekly Limit Threshold"),
+                        subtitle: localized("Switch when the current account's weekly limit reaches this percentage.")
+                    ) {
+                        HStack {
+                            Slider(value: $autoSwitchWeeklyThreshold, in: 1...100) { _ in
+                                onAutoSwitchChanged(autoSwitchEnabled, autoSwitchSessionThreshold, autoSwitchWeeklyThreshold, autoSwitchNotificationEnabled)
+                            }
+                            .frame(width: 150)
+                            Text("\(Int(autoSwitchWeeklyThreshold))%")
+                                .frame(width: 40, alignment: .trailing)
+                        }
+                    }
+                    SettingsDivider()
+                    SettingsLine(
+                        title: localized("Auto-Switch Notifications"),
+                        subtitle: localized("Show a macOS notification when an automatic switch occurs.")
+                    ) {
+                        SettingsSwitch(isOn: $autoSwitchNotificationEnabled) {
+                            onAutoSwitchChanged(autoSwitchEnabled, autoSwitchSessionThreshold, autoSwitchWeeklyThreshold, autoSwitchNotificationEnabled)
+                        }
+                    }
+                }
+            }
+            .disabled(!isOfficialLogin)
+            .opacity(isOfficialLogin ? 1.0 : 0.5)
         }
     }
 
@@ -2299,14 +2250,6 @@ private struct SettingsWindowView: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .stroke(Color.secondary.opacity(0.12), lineWidth: 0.5)
             }
-    }
-
-    private var settingsWindowBackground: some View {
-        Rectangle().fill(.ultraThinMaterial)
-    }
-
-    private var settingsSidebarBackground: some View {
-        Color.clear
     }
 
     private func sectionTitle(_ key: String) -> some View {
