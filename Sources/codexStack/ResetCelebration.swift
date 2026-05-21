@@ -3,6 +3,15 @@ import SwiftUI
 import QuartzCore
 import UserNotifications
 
+// Forces notification banners to appear even while the app is running.
+final class NotificationPresentationDelegate: NSObject, UNUserNotificationCenterDelegate, Sendable {
+    static let shared = NotificationPresentationDelegate()
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound, .list])
+    }
+}
+
 enum ResetCelebrationKind: Sendable {
     case weekly
 
@@ -10,13 +19,11 @@ enum ResetCelebrationKind: Sendable {
         return NSLocalizedString("Weekly Quota Reset!", bundle: .module, comment: "")
     }
 
-    var subtitle: String {
+    var notificationBody: String {
         return NSLocalizedString("A whole new week of Codex.", bundle: .module, comment: "")
     }
 
-    var emoji: String {
-        return "🎊"
-    }
+    var emoji: String { "🎊" }
 
     var notificationID: String { "codexstack.celebration.weekly" }
 }
@@ -72,7 +79,7 @@ final class ResetCelebrationController {
             guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { return }
             let content = UNMutableNotificationContent()
             content.title = kind.emoji + " " + kind.title
-            content.body = kind.subtitle
+            content.body = kind.notificationBody
             content.sound = .default
             let request = UNNotificationRequest(identifier: kind.notificationID, content: content, trigger: nil)
             center.add(request)

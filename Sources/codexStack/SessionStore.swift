@@ -77,7 +77,9 @@ final class SessionStore: ObservableObject {
         refresh()
         scheduleAutoRefresh()
         
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+        let center = UNUserNotificationCenter.current()
+        center.delegate = NotificationPresentationDelegate.shared
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
         
         NotificationCenter.default.addObserver(forName: .pricingUpdated, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
