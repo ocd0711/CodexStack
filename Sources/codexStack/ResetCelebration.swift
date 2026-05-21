@@ -128,16 +128,13 @@ final class ResetCelebrationController {
 // MARK: - Confetti
 
 private struct ConfettiNSViewRepresentable: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = ConfettiEmitterView()
-        view.fire()
-        return view
-    }
+    func makeNSView(context: Context) -> NSView { ConfettiEmitterView() }
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 private class ConfettiEmitterView: NSView {
     private let emitter = CAEmitterLayer()
+    private var hasFired = false
 
     override var isFlipped: Bool { true }
 
@@ -154,9 +151,13 @@ private class ConfettiEmitterView: NSView {
         emitter.emitterPosition = CGPoint(x: bounds.midX, y: -20)
         emitter.emitterSize = CGSize(width: bounds.width, height: 1)
         emitter.emitterShape = .line
+        if !hasFired && bounds.width > 0 {
+            hasFired = true
+            fire()
+        }
     }
 
-    func fire() {
+    private func fire() {
         emitter.seed = arc4random()
         let colors: [NSColor] = [
             NSColor(red: 1.0, green: 0.2, blue: 0.3, alpha: 1.0),
