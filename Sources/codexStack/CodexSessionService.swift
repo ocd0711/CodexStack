@@ -700,10 +700,12 @@ struct CodexSessionService {
     }
 
     private func resolvedSessionTitle(threadTitle: String?, indexTitle: String?) -> String {
-        if let title = normalizedTitle(threadTitle), title != "Untitled" {
+        // Prefer indexTitle: session_index.jsonl is where Codex appends AI-generated titles,
+        // while the SQLite title column is often just the first user message.
+        if let title = normalizedTitle(indexTitle), title != "Untitled" {
             return title
         }
-        if let title = normalizedTitle(indexTitle), title != "Untitled" {
+        if let title = normalizedTitle(threadTitle), title != "Untitled" {
             return title
         }
         return "Untitled"
@@ -711,8 +713,11 @@ struct CodexSessionService {
 
     private func normalizedTitle(_ raw: String?) -> String? {
         guard let raw else { return nil }
-        let title = raw
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        // Use only the first non-empty line, matching how Codex displays multi-line titles
+        let firstLine = raw.components(separatedBy: .newlines)
+            .first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) ?? ""
+        let title = firstLine
+            .trimmingCharacters(in: .whitespaces)
             .split(whereSeparator: \.isWhitespace)
             .joined(separator: " ")
         return title.isEmpty ? nil : title
