@@ -101,11 +101,11 @@ enum UsageSource: String, Sendable {
     var label: String {
         switch self {
         case .live:
-            return "Live"
+            return NSLocalizedString("Live", bundle: .module, comment: "")
         case .cached:
-            return "Cached"
+            return NSLocalizedString("Cached", bundle: .module, comment: "")
         case .unavailable:
-            return "Unavailable"
+            return NSLocalizedString("Unavailable", bundle: .module, comment: "")
         }
     }
 }

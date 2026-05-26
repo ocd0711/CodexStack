@@ -324,7 +324,13 @@ private struct MenuBarPanel: View {
                 }
                 accountSwitcher
                 if let updatedAt = store.usage.updatedAt {
-                    Text("\(store.usage.source.label) · Updated \(updatedAt.formatted(.relative(presentation: .named)))")
+                    Text(
+                        String(
+                            format: NSLocalizedString("%@ · Updated %@", bundle: .module, comment: ""),
+                            store.usage.source.label,
+                            updatedAt.formatted(.relative(presentation: .named))
+                        )
+                    )
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
@@ -897,7 +903,7 @@ private struct MenuBarPanel: View {
             VStack(spacing: 3) {
                 Image(systemName: icon)
                     .font(.system(size: 14))
-                Text(label)
+                Text(NSLocalizedString(label, bundle: .module, comment: ""))
                     .font(.system(size: 10))
             }
             .foregroundStyle(destructive ? .red : .primary)
@@ -905,7 +911,7 @@ private struct MenuBarPanel: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(help ?? label)
+        .help(NSLocalizedString(help ?? label, bundle: .module, comment: ""))
     }
 
     private func lockScreenKeepingAwake() {
@@ -2856,7 +2862,10 @@ private struct SettingsWindowView: View {
             let count = try syncService.sync()
             accountAlert = UpdateAlert(
                 title: localized("Sync Complete"),
-                message: localized("Synchronized \(count) session(s) metadata successfully. You may need to restart Codex for changes to take full effect.")
+                message: String(
+                    format: localized("Synchronized %d session(s) metadata successfully. You may need to restart Codex for changes to take full effect."),
+                    count
+                )
             )
         } catch {
             accountAlert = UpdateAlert(
