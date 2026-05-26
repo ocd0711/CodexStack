@@ -21,6 +21,7 @@
 		A1B2C3D4E5F600000000010B /* MouseLocationReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600000000020B /* MouseLocationReader.swift */; };
 		A1B2C3D4E5F600000000010C /* UtilizationHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600000000020C /* UtilizationHistoryStore.swift */; };
 		A1B2C3D4E5F600000000010D /* UtilizationHistoryChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600000000020D /* UtilizationHistoryChartView.swift */; };
+		A1B2C3D4E5F600000000010E /* PowerManagementService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600000000020E /* PowerManagementService.swift */; };
 		A1B2C3D4E5F6000000000111 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000000000211 /* Assets.xcassets */; };
 		A1B2C3D4E5F6000000000112 /* codexStack-logo.png in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000000000212 /* codexStack-logo.png */; };
 		A1B2C3D4E5F6000000000113 /* codexStack.icns in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000000000213 /* codexStack.icns */; };
@@ -45,6 +46,7 @@
 		A1B2C3D4E5F600000000020B /* MouseLocationReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MouseLocationReader.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F600000000020C /* UtilizationHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UtilizationHistoryStore.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F600000000020D /* UtilizationHistoryChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UtilizationHistoryChartView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F600000000020E /* PowerManagementService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PowerManagementService.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000000000210 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000000000211 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000000000212 /* codexStack-logo.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Assets/codexStack-logo.png"; sourceTree = "<group>"; };
@@ -116,6 +118,7 @@
 				A1B2C3D4E5F600000000020B /* MouseLocationReader.swift */,
 				A1B2C3D4E5F600000000020C /* UtilizationHistoryStore.swift */,
 				A1B2C3D4E5F600000000020D /* UtilizationHistoryChartView.swift */,
+				A1B2C3D4E5F600000000020E /* PowerManagementService.swift */,
 			);
 			path = codexStack;
 			sourceTree = "<group>";
@@ -219,6 +222,7 @@
 				A1B2C3D4E5F600000000010B /* MouseLocationReader.swift in Sources */,
 				A1B2C3D4E5F600000000010C /* UtilizationHistoryStore.swift in Sources */,
 				A1B2C3D4E5F600000000010D /* UtilizationHistoryChartView.swift in Sources */,
+				A1B2C3D4E5F600000000010E /* PowerManagementService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

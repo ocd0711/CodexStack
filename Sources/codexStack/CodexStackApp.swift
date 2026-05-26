@@ -255,6 +255,7 @@ private struct MenuBarPanel: View {
     @State private var hoverUtilCard = false
     @State private var hoverDetailPane = false
     @State private var closePaneTask: Task<Void, Never>?
+    @State private var lockScreenError: String?
     @AppStorage("accountsSortOption") private var accountsSortRaw: String = AccountsSortOption.importedNewest.rawValue
     @AppStorage("accountsManualOrder") private var accountsManualOrderRaw: String = ""
     @AppStorage("accountsPinActive") private var accountsPinActive: Bool = false
@@ -291,6 +292,16 @@ private struct MenuBarPanel: View {
         }
         .frame(minWidth: 360, idealWidth: 390, maxWidth: 420)
         .animation(.easeInOut(duration: 0.12), value: activePane)
+        .alert("Unable to Lock Screen", isPresented: Binding(
+            get: { lockScreenError != nil },
+            set: { if !$0 { lockScreenError = nil } }
+        ), actions: {
+            Button("OK") {
+                lockScreenError = nil
+            }
+        }, message: {
+            Text(lockScreenError ?? "")
+        })
         .onDisappear {
             cancelClosePaneTask()
         }
@@ -859,6 +870,9 @@ private struct MenuBarPanel: View {
                 Task { await ModelPricingSyncService.shared.syncPrices() }
             }
             .disabled(store.isBusy)
+            actionButton("Lock", icon: "lock", help: "Lock macOS and keep Codex sessions awake in the background.") {
+                lockScreenKeepingAwake()
+            }
             actionButton("Settings", icon: "gearshape") {
                 activePane = .none
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { onOpenSettings() }
@@ -876,6 +890,7 @@ private struct MenuBarPanel: View {
         _ label: String,
         icon: String,
         destructive: Bool = false,
+        help: String? = nil,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -886,10 +901,20 @@ private struct MenuBarPanel: View {
                     .font(.system(size: 10))
             }
             .foregroundStyle(destructive ? .red : .primary)
-            .frame(minWidth: 52, minHeight: 36)
+            .frame(minWidth: 46, minHeight: 36)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help(help ?? label)
+    }
+
+    private func lockScreenKeepingAwake() {
+        do {
+            try PowerManagementService.lockScreenKeepingAwake()
+            dismiss()
+        } catch {
+            lockScreenError = error.localizedDescription
+        }
     }
 
     private var recentProjectLabels: [String] {
@@ -1705,7 +1730,7 @@ final class ManagerWindowController: NSWindowController, NSWindowDelegate {
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
             window.isMovableByWindowBackground = true
-            window.toolbarStyle = .unifiedCompact
+            window.toolbarStyle = .unified
             window.backgroundColor = .clear
             window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
             window.delegate = self
@@ -1727,7 +1752,7 @@ final class ManagerWindowController: NSWindowController, NSWindowDelegate {
 @MainActor
 final class SettingsWindowController: NSWindowController {
     static let shared = SettingsWindowController()
-    private let contentSize = NSSize(width: 720, height: 520)
+    private let contentSize = NSSize(width: 960, height: 620)
     private var settingsHostingController: NSHostingController<SettingsWindowView>?
 
     private init() {
@@ -1831,36 +1856,63 @@ final class SettingsWindowController: NSWindowController {
         if window == nil {
             let window = NSWindow(contentViewController: hostingController)
             window.title = "Settings"
-            window.styleMask.insert(.fullSizeContentView)
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
             window.isReleasedWhenClosed = false
             window.level = .normal
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
             window.isMovableByWindowBackground = true
             window.toolbarStyle = .unified
-            let toolbar = NSToolbar()
-            toolbar.showsBaselineSeparator = false
+            let toolbar = NSToolbar(identifier: "SettingsToolbar")
+            toolbar.showsBaselineSeparator = true
             window.toolbar = toolbar
             window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+            window.minSize = NSSize(width: 860, height: 560)
+            window.maxSize = NSSize(width: 1080, height: CGFloat.greatestFiniteMagnitude)
             window.setContentSize(contentSize)
-            window.minSize = NSSize(width: 640, height: 460)
             self.window = window
         } else {
             window?.contentViewController = hostingController
+            window?.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+            window?.titleVisibility = .hidden
+            window?.titlebarAppearsTransparent = true
+            window?.isMovableByWindowBackground = true
+            window?.toolbarStyle = .unified
+            if window?.toolbar == nil {
+                let toolbar = NSToolbar(identifier: "SettingsToolbar")
+                toolbar.showsBaselineSeparator = true
+                window?.toolbar = toolbar
+            }
         }
 
-        window?.setContentSize(contentSize)
-        window?.minSize = NSSize(width: 760, height: 500)
+        window?.minSize = NSSize(width: 860, height: 560)
+        window?.maxSize = NSSize(width: 1080, height: CGFloat.greatestFiniteMagnitude)
         if let window {
             WindowPositioner.centerOnActiveScreen(window)
         }
         NSApplication.shared.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
     }
+
+    func bringToFront() {
+        guard let window else { return }
+        bringWindowToFront(window)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) { [weak self] in
+            guard let window = self?.window else { return }
+            self?.bringWindowToFront(window)
+        }
+    }
+
+    private func bringWindowToFront(_ window: NSWindow) {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        window.deminiaturize(nil)
+        window.orderFrontRegardless()
+        window.makeKeyAndOrderFront(nil)
+    }
 }
 
 private enum SettingsNavItem: String, Hashable {
-    case codex, menuBar, celebrations
+    case codex, menuBar, power, celebrations
     case importedAccounts, autoSwitch
     case about
 
@@ -1868,6 +1920,7 @@ private enum SettingsNavItem: String, Hashable {
         switch self {
         case .codex: return "Codex"
         case .menuBar: return "Menu Bar"
+        case .power: return "Power"
         case .celebrations: return "Celebrations"
         case .importedAccounts: return "Imported Accounts"
         case .autoSwitch: return "Auto-Switch"
@@ -1879,6 +1932,7 @@ private enum SettingsNavItem: String, Hashable {
         switch self {
         case .codex: return "folder"
         case .menuBar: return "menubar.rectangle"
+        case .power: return "powerplug"
         case .celebrations: return "party.popper"
         case .importedAccounts: return "person.crop.circle.badge.plus"
         case .autoSwitch: return "arrow.triangle.2.circlepath"
@@ -1887,9 +1941,14 @@ private enum SettingsNavItem: String, Hashable {
     }
 }
 
+private enum PowerSystemSetupSetting {
+    case freeze
+}
+
 @MainActor
 private struct SettingsWindowView: View {
     @State private var selectedItem: SettingsNavItem? = .codex
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var currentPath: String
     @State private var progressMode: UtilizationProgressMode
     @State private var showMenuBarPercentage: Bool
@@ -1906,6 +1965,10 @@ private struct SettingsWindowView: View {
     @State private var autoSwitchSessionThreshold: Double
     @State private var autoSwitchWeeklyThreshold: Double
     @State private var autoSwitchNotificationEnabled: Bool
+    @State private var powerSnapshot: PowerManagementSnapshot?
+    @State private var powerScope: PowerManagementScope = .current
+    @State private var isRefreshingPowerSettings = false
+    @State private var isApplyingPowerSettings = false
     @AppStorage("accountsSortOption") private var accountsSortRaw: String = AccountsSortOption.importedNewest.rawValue
     @AppStorage("accountsManualOrder") private var accountsManualOrderRaw: String = ""
     @AppStorage("accountsPinActive") private var accountsPinActive: Bool = false
@@ -1980,13 +2043,15 @@ private struct SettingsWindowView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             List(selection: $selectedItem) {
                 Section(localized("General")) {
                     Label(localized("Codex"), systemImage: SettingsNavItem.codex.symbolName)
                         .tag(SettingsNavItem.codex)
                     Label(localized("Menu Bar"), systemImage: SettingsNavItem.menuBar.symbolName)
                         .tag(SettingsNavItem.menuBar)
+                    Label(localized("Power"), systemImage: SettingsNavItem.power.symbolName)
+                        .tag(SettingsNavItem.power)
                     Label(localized("Celebrations"), systemImage: SettingsNavItem.celebrations.symbolName)
                         .tag(SettingsNavItem.celebrations)
                 }
@@ -1996,13 +2061,13 @@ private struct SettingsWindowView: View {
                     Label(localized("Auto-Switch"), systemImage: SettingsNavItem.autoSwitch.symbolName)
                         .tag(SettingsNavItem.autoSwitch)
                 }
-                Section {
+                Section(localized("Application")) {
                     Label(localized("About"), systemImage: SettingsNavItem.about.symbolName)
                         .tag(SettingsNavItem.about)
                 }
             }
             .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 160, ideal: 190)
+            .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 260)
         } detail: {
             let current = selectedItem ?? .codex
             ScrollView {
@@ -2013,21 +2078,34 @@ private struct SettingsWindowView: View {
                     switch current {
                     case .codex: codexPane
                     case .menuBar: menuBarPane
+                    case .power: powerPane
                     case .celebrations: celebrationsPane
                     case .importedAccounts: importedAccountsPane
                     case .autoSwitch: autoSwitchPane
                     case .about: aboutPane
                     }
                 }
-                .frame(maxWidth: 560, alignment: .leading)
-                .padding(.horizontal, 36)
-                .padding(.vertical, 30)
-                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.horizontal, 34)
+                .padding(.top, 54)
+                .padding(.bottom, 30)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollContentBackground(.hidden)
             .navigationTitle(localized(current.title))
+            .toolbar {
+                ToolbarItem(placement: .navigation) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            columnVisibility = columnVisibility == .all ? .detailOnly : .all
+                        }
+                    } label: {
+                        Image(systemName: "sidebar.leading")
+                    }
+                    .help(localized("Toggle Sidebar"))
+                }
+            }
         }
-        .frame(minWidth: 640, minHeight: 460)
+        .frame(minWidth: 860, minHeight: 560)
         .alert(item: $updateAlert) { alert in
             Alert(
                 title: Text(alert.title),
@@ -2128,6 +2206,118 @@ private struct SettingsWindowView: View {
                     }
                     .disabled(isSyncingPrices)
                 }
+            }
+        }
+    }
+
+    private var powerPane: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            settingsCard {
+                SettingsLine(
+                    title: localized("Prevent Sleep Profile"),
+                    subtitle: localized("Apply macOS power settings for long-running Codex sessions.")
+                ) {
+                    HStack(spacing: 8) {
+                        Picker("", selection: $powerScope) {
+                            ForEach(PowerManagementScope.allCases) { scope in
+                                Text(localized(scope.label)).tag(scope)
+                            }
+                        }
+                        .frame(width: 170)
+                        .onChange(of: powerScope) { _ in refreshPowerSettings() }
+
+                        Button {
+                            refreshPowerSettings()
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .help(localized("Refresh"))
+                        .disabled(isRefreshingPowerSettings || isApplyingPowerSettings)
+
+                        Button {
+                            applyRecommendedPowerSettings()
+                        } label: {
+                            Image(systemName: "checkmark.circle")
+                        }
+                        .help(localized("Apply Recommended"))
+                        .disabled(isRefreshingPowerSettings || isApplyingPowerSettings || isPowerProfileRecommended)
+
+                        Button {
+                            applyDisabledPowerSettings()
+                        } label: {
+                            Image(systemName: "xmark.circle")
+                        }
+                        .help(localized("Turn Off Profile"))
+                        .disabled(isRefreshingPowerSettings || isApplyingPowerSettings)
+                    }
+                }
+                SettingsDivider()
+                powerStatusRow(
+                    title: "System sleep",
+                    subtitle: "pmset sleep 0",
+                    value: powerSnapshot?.sleepDisabled,
+                    setRecommended: { applyPowerSetting(key: "sleep", value: 0) },
+                    setDisabled: { applyPowerSetting(key: "sleep", value: 20) }
+                )
+                SettingsDivider()
+                powerStatusRow(
+                    title: "Display sleep",
+                    subtitle: "pmset displaysleep 0",
+                    value: powerSnapshot?.displaySleepDisabled,
+                    setRecommended: { applyPowerSetting(key: "displaysleep", value: 0) },
+                    setDisabled: { applyPowerSetting(key: "displaysleep", value: 10) }
+                )
+                SettingsDivider()
+                powerStatusRow(
+                    title: "Disk sleep",
+                    subtitle: "pmset disksleep 0",
+                    value: powerSnapshot?.diskSleepDisabled,
+                    setRecommended: { applyPowerSetting(key: "disksleep", value: 0) },
+                    setDisabled: { applyPowerSetting(key: "disksleep", value: 10) }
+                )
+                SettingsDivider()
+                powerStatusRow(
+                    title: "Wake on network",
+                    subtitle: "pmset womp 1",
+                    value: powerSnapshot?.wakeOnMagicPacketEnabled,
+                    setRecommended: { applyPowerSetting(key: "womp", value: 1) },
+                    setDisabled: { applyPowerSetting(key: "womp", value: 0) }
+                )
+                SettingsDivider()
+                powerStatusRow(
+                    title: "Power Nap",
+                    subtitle: "pmset powernap 0",
+                    value: powerSnapshot?.powerNapDisabled,
+                    setRecommended: { applyPowerSetting(key: "powernap", value: 0) },
+                    setDisabled: { applyPowerSetting(key: "powernap", value: 1) }
+                )
+                SettingsDivider()
+                powerStatusRow(
+                    title: "Restart after power failure",
+                    subtitle: "pmset autorestart 1",
+                    value: powerSnapshot?.autoRestartEnabled,
+                    unavailable: powerSnapshot?.autoRestartAvailable == false,
+                    setRecommended: { applyPowerSetting(key: "autorestart", value: 1) },
+                    setDisabled: { applyPowerSetting(key: "autorestart", value: 0) }
+                )
+                SettingsDivider()
+                powerStatusRow(
+                    title: "Restart after freeze",
+                    subtitle: "systemsetup -setrestartfreeze on",
+                    value: powerSnapshot?.restartAfterFreezeEnabled,
+                    requiresAdmin: powerSnapshot?.restartAfterFreezeRequiresAdmin == true,
+                    setRecommended: { applyPowerSystemSetupSetting(.freeze, enabled: true) },
+                    setDisabled: { applyPowerSystemSetupSetting(.freeze, enabled: false) }
+                )
+            }
+            Text(localized("Applying recommended power settings requires administrator authorization."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
+        }
+        .onAppear {
+            if powerSnapshot == nil {
+                refreshPowerSettings()
             }
         }
     }
@@ -2292,6 +2482,78 @@ private struct SettingsWindowView: View {
         }
     }
 
+    private func powerStatusRow(
+        title: String,
+        subtitle: String,
+        value: Bool?,
+        unavailable: Bool = false,
+        requiresAdmin: Bool = false,
+        setRecommended: @escaping () -> Void,
+        setDisabled: @escaping () -> Void
+    ) -> some View {
+        SettingsLine(title: localized(title), subtitle: subtitle) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(powerStatusColor(value, unavailable: unavailable, requiresAdmin: requiresAdmin))
+                    .frame(width: 8, height: 8)
+                Text(powerStatusLabel(value, unavailable: unavailable, requiresAdmin: requiresAdmin))
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(value == true ? Color.green : .secondary)
+                    .frame(width: 92, alignment: .trailing)
+                Menu {
+                    Button(localized("Set Recommended")) {
+                        setRecommended()
+                    }
+                    .disabled(value == true)
+                    Button(localized("Turn Off")) {
+                        setDisabled()
+                    }
+                    .disabled(value == false)
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .menuStyle(.borderlessButton)
+                .controlSize(.small)
+                .frame(width: 42, height: 26)
+                .help(localized("Power Actions"))
+                .disabled(unavailable || isRefreshingPowerSettings || isApplyingPowerSettings)
+            }
+        }
+    }
+
+    private var isPowerProfileRecommended: Bool {
+        guard let powerSnapshot, powerSnapshot.knownCount > 0 else {
+            return false
+        }
+        return powerSnapshot.recommendedCount == powerSnapshot.knownCount
+    }
+
+    private func powerStatusColor(_ value: Bool?, unavailable: Bool, requiresAdmin: Bool) -> Color {
+        if unavailable { return .secondary.opacity(0.45) }
+        if requiresAdmin { return .blue }
+        switch value {
+        case true:
+            return .green
+        case false:
+            return .secondary.opacity(0.45)
+        case nil:
+            return .orange
+        }
+    }
+
+    private func powerStatusLabel(_ value: Bool?, unavailable: Bool, requiresAdmin: Bool) -> String {
+        if unavailable { return localized("Unavailable") }
+        if requiresAdmin { return localized("Needs Admin") }
+        switch value {
+        case true:
+            return localized("Recommended")
+        case false:
+            return localized("Not Set")
+        case nil:
+            return localized("Unknown")
+        }
+    }
+
     private var aboutPane: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(spacing: 8) {
@@ -2329,12 +2591,16 @@ private struct SettingsWindowView: View {
 
     private func settingsCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         VStack(spacing: 0, content: content)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(
+                Color(nsColor: .windowBackgroundColor).opacity(0.82),
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            )
             .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Color.secondary.opacity(0.12), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.secondary.opacity(0.08), lineWidth: 0.5)
             }
+            .shadow(color: .black.opacity(0.035), radius: 10, x: 0, y: 3)
     }
 
     private func sectionTitle(_ key: String) -> some View {
@@ -2681,6 +2947,165 @@ private struct SettingsWindowView: View {
                 title: localized("Unable to Update Login Item"),
                 message: error.localizedDescription
             )
+        }
+    }
+
+    private func refreshPowerSettings() {
+        guard !isRefreshingPowerSettings else { return }
+        isRefreshingPowerSettings = true
+        let scope = powerScope
+        Task {
+            var snapshot = await Task.detached(priority: .userInitiated) {
+                PowerManagementService.loadSnapshot(scope: scope)
+            }.value
+            if snapshot.restartAfterFreezeRequiresAdmin {
+                snapshot = await MainActor.run {
+                    PowerManagementService.loadSnapshotWithAuthorizedReads(scope: scope)
+                }
+                await MainActor.run {
+                    SettingsWindowController.shared.bringToFront()
+                }
+            }
+            await MainActor.run {
+                powerSnapshot = snapshot
+                isRefreshingPowerSettings = false
+            }
+        }
+    }
+
+    private func applyRecommendedPowerSettings() {
+        guard !isApplyingPowerSettings else { return }
+        isApplyingPowerSettings = true
+        let scope = powerScope
+        Task {
+            do {
+                try await MainActor.run {
+                    try PowerManagementService.applyRecommendedSettings(scope: scope)
+                    SettingsWindowController.shared.bringToFront()
+                }
+                let snapshot = await Task.detached(priority: .userInitiated) {
+                    PowerManagementService.snapshotAfterApplyingRecommendedSettings(scope: scope)
+                }.value
+                await MainActor.run {
+                    powerSnapshot = snapshot
+                    isApplyingPowerSettings = false
+                    updateAlert = UpdateAlert(
+                        title: localized("Power Settings Updated"),
+                        message: localized("Recommended sleep prevention settings have been applied.")
+                    )
+                }
+            } catch {
+                await MainActor.run {
+                    isApplyingPowerSettings = false
+                    updateAlert = UpdateAlert(
+                        title: localized("Unable to Update Power Settings"),
+                        message: error.localizedDescription
+                    )
+                }
+            }
+        }
+    }
+
+    private func applyDisabledPowerSettings() {
+        guard !isApplyingPowerSettings else { return }
+        isApplyingPowerSettings = true
+        let scope = powerScope
+        Task {
+            do {
+                try await MainActor.run {
+                    try PowerManagementService.applyDisabledSettings(scope: scope)
+                    SettingsWindowController.shared.bringToFront()
+                }
+                let snapshot = await Task.detached(priority: .userInitiated) {
+                    var snapshot = PowerManagementService.loadSnapshot(scope: scope)
+                    snapshot.restartAfterFreezeEnabled = false
+                    snapshot.restartAfterFreezeRequiresAdmin = false
+                    return snapshot
+                }.value
+                await MainActor.run {
+                    powerSnapshot = snapshot
+                    isApplyingPowerSettings = false
+                    updateAlert = UpdateAlert(
+                        title: localized("Power Settings Updated"),
+                        message: localized("Prevent sleep profile has been turned off.")
+                    )
+                }
+            } catch {
+                await MainActor.run {
+                    isApplyingPowerSettings = false
+                    updateAlert = UpdateAlert(
+                        title: localized("Unable to Update Power Settings"),
+                        message: error.localizedDescription
+                    )
+                }
+            }
+        }
+    }
+
+    private func applyPowerSetting(key: String, value: Int) {
+        guard !isApplyingPowerSettings else { return }
+        isApplyingPowerSettings = true
+        let scope = powerScope
+        Task {
+            do {
+                try await MainActor.run {
+                    try PowerManagementService.applyPMSetSetting(key: key, value: value, scope: scope)
+                    SettingsWindowController.shared.bringToFront()
+                }
+                let snapshot = await Task.detached(priority: .userInitiated) {
+                    PowerManagementService.loadSnapshot(scope: scope)
+                }.value
+                await MainActor.run {
+                    powerSnapshot = snapshot
+                    isApplyingPowerSettings = false
+                }
+            } catch {
+                await MainActor.run {
+                    isApplyingPowerSettings = false
+                    updateAlert = UpdateAlert(
+                        title: localized("Unable to Update Power Settings"),
+                        message: error.localizedDescription
+                    )
+                }
+            }
+        }
+    }
+
+    private func applyPowerSystemSetupSetting(_ setting: PowerSystemSetupSetting, enabled: Bool) {
+        guard !isApplyingPowerSettings else { return }
+        isApplyingPowerSettings = true
+        let scope = powerScope
+        Task {
+            do {
+                try await MainActor.run {
+                    switch setting {
+                    case .freeze:
+                        try PowerManagementService.applyRestartAfterFreeze(enabled: enabled)
+                    }
+                    SettingsWindowController.shared.bringToFront()
+                }
+                let snapshot = await Task.detached(priority: .userInitiated) {
+                    var snapshot = PowerManagementService.loadSnapshot(scope: scope)
+                    switch setting {
+                    case .freeze:
+                        snapshot.restartAfterFreezeEnabled = enabled
+                        snapshot.restartAfterFreezeRequiresAdmin = false
+                    }
+                    return snapshot
+                }.value
+                await MainActor.run {
+                    powerSnapshot = snapshot
+                    isApplyingPowerSettings = false
+                }
+            } catch {
+                await MainActor.run {
+                    isApplyingPowerSettings = false
+                    updateAlert = UpdateAlert(
+                        title: localized("Unable to Update Power Settings"),
+                        message: error.localizedDescription
+                    )
+                }
+            }
         }
     }
 

@@ -93,7 +93,7 @@ swift build
 The repository also includes a standard Xcode macOS app project:
 
 ```bash
-xcodebuild -project codexStack.xcodeproj -scheme codexStack -configuration Debug build
+xcodebuild -project codexStack.xcodeproj -scheme codexStack -configuration Debug build -derivedDataPath ./build
 ```
 
 ## Unsigned App Builds
