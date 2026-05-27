@@ -12,6 +12,7 @@ struct ImportedCodexAccount: Codable, Identifiable, Hashable, Sendable {
     let expiresAt: Date?
     let lastRefreshAt: Date?
     let importedAt: Date
+    let sourcePath: String?
 
     var isExpired: Bool {
         guard let expiresAt else { return false }
@@ -28,6 +29,7 @@ struct ImportedCodexAccountSummary: Identifiable, Hashable, Sendable {
     let expiresAt: Date?
     let lastRefreshAt: Date?
     let importedAt: Date
+    let sourcePath: String?
 
     var displayName: String {
         if let note, !note.isEmpty { return note }
@@ -49,6 +51,7 @@ enum AccountCredentialStore {
 
     static func loadSummaries() -> [ImportedCodexAccountSummary] {
         loadAccounts()
+            .map(refreshFromSource)
             .map { account in
                 ImportedCodexAccountSummary(
                     id: account.id,
@@ -58,7 +61,8 @@ enum AccountCredentialStore {
                     type: account.type,
                     expiresAt: account.expiresAt,
                     lastRefreshAt: account.lastRefreshAt,
-                    importedAt: account.importedAt
+                    importedAt: account.importedAt,
+                    sourcePath: account.sourcePath
                 )
             }
             .sorted { lhs, rhs in
@@ -69,7 +73,11 @@ enum AccountCredentialStore {
     @discardableResult
     static func importAccount(from url: URL) throws -> ImportedCodexAccount {
         let data = try Data(contentsOf: url)
-        let account = try parseAccount(data: data, fallbackNote: url.deletingPathExtension().lastPathComponent)
+        let account = try parseAccount(
+            data: data,
+            fallbackNote: url.deletingPathExtension().lastPathComponent,
+            sourcePath: url.standardizedFileURL.path
+        )
 
         var accounts = loadAccounts().filter { $0.id != account.id }
         accounts.append(account)
@@ -104,7 +112,8 @@ enum AccountCredentialStore {
             refreshToken: refreshToken ?? current.refreshToken,
             expiresAt: expiresAt,
             lastRefreshAt: lastRefreshAt,
-            importedAt: current.importedAt
+            importedAt: current.importedAt,
+            sourcePath: current.sourcePath
         )
         try save(accounts)
     }
@@ -131,7 +140,34 @@ enum AccountCredentialStore {
         return base.appending(path: "codexStack", directoryHint: .isDirectory).appending(path: fileName)
     }
 
-    private static func parseAccount(data: Data, fallbackNote: String) throws -> ImportedCodexAccount {
+    static func refreshFromSource(_ account: ImportedCodexAccount) -> ImportedCodexAccount {
+        guard let sourcePath = normalizedString(account.sourcePath),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: sourcePath)),
+              let refreshed = try? parseAccount(
+                  data: data,
+                  fallbackNote: account.note ?? URL(fileURLWithPath: sourcePath).deletingPathExtension().lastPathComponent,
+                  sourcePath: sourcePath
+              ) else {
+            return account
+        }
+
+        return ImportedCodexAccount(
+            id: account.id,
+            accountID: refreshed.accountID ?? account.accountID,
+            email: refreshed.email ?? account.email,
+            note: account.note ?? refreshed.note,
+            type: refreshed.type ?? account.type,
+            accessToken: refreshed.accessToken,
+            idToken: refreshed.idToken,
+            refreshToken: refreshed.refreshToken,
+            expiresAt: refreshed.expiresAt,
+            lastRefreshAt: refreshed.lastRefreshAt,
+            importedAt: account.importedAt,
+            sourcePath: sourcePath
+        )
+    }
+
+    private static func parseAccount(data: Data, fallbackNote: String, sourcePath: String?) throws -> ImportedCodexAccount {
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw NSError(domain: "codexStack", code: 101, userInfo: [NSLocalizedDescriptionKey: "Invalid account JSON"])
         }
@@ -193,7 +229,8 @@ enum AccountCredentialStore {
             refreshToken: refreshToken,
             expiresAt: expiresAt,
             lastRefreshAt: lastRefreshAt,
-            importedAt: Date()
+            importedAt: Date(),
+            sourcePath: sourcePath
         )
     }
 

@@ -447,6 +447,7 @@ struct UsageMetricsService {
         var credentials = refreshedCredentialsIfNeeded(credentials, codexRoot: codexRoot)
         var fetchResult = fetchCodexUsage(usageURL: usageURL, credentials: credentials)
         if fetchResult.1,
+           credentials.isCurrentCodexAccount,
            let refreshToken = credentials.refreshToken,
            !refreshToken.isEmpty,
            let refreshed = refreshOAuthCredentials(credentials, refreshToken: refreshToken) {
@@ -511,7 +512,8 @@ struct UsageMetricsService {
     }
 
     private func refreshedCredentialsIfNeeded(_ credentials: OAuthCredentials, codexRoot: URL) -> OAuthCredentials {
-        guard credentials.isExpired,
+        guard credentials.isCurrentCodexAccount,
+              credentials.isExpired,
               let refreshToken = credentials.refreshToken,
               !refreshToken.isEmpty,
               let refreshed = refreshOAuthCredentials(credentials, refreshToken: refreshToken) else {
@@ -897,7 +899,8 @@ struct UsageMetricsService {
 
     private func loadImportedOAuthCredentials() -> [OAuthCredentials] {
         AccountCredentialStore.loadAccounts().map { account in
-            OAuthCredentials(
+            let account = AccountCredentialStore.refreshFromSource(account)
+            return OAuthCredentials(
                 id: account.id,
                 accessToken: account.accessToken,
                 idToken: account.idToken,
