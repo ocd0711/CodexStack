@@ -209,11 +209,23 @@ enum PowerManagementService {
     }
 
     static func lockScreenKeepingAwake() throws {
-        try startKeepAwakeUntilQuit()
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession")
-        process.arguments = ["-suspend"]
-        try process.run()
+        let startedKeepAwake = try startKeepAwakeUntilQuit()
+        do {
+            try suspendUserSession()
+        } catch {
+            if startedKeepAwake {
+                stopKeepAwake()
+            }
+            throw error
+        }
+    }
+
+    static var isKeepingAwake: Bool {
+        keepAwakeProcess?.isRunning == true
+    }
+
+    static func stopKeepingAwake() {
+        stopKeepAwake()
     }
 
     private static func pmsetFlag(for scope: PowerManagementScope) -> String {
@@ -257,9 +269,10 @@ enum PowerManagementService {
         }
     }
 
-    private static func startKeepAwakeUntilQuit() throws {
+    @discardableResult
+    private static func startKeepAwakeUntilQuit() throws -> Bool {
         if keepAwakeProcess?.isRunning == true {
-            return
+            return false
         }
 
         let process = Process()
@@ -267,6 +280,29 @@ enum PowerManagementService {
         process.arguments = ["-ims", "-w", String(ProcessInfo.processInfo.processIdentifier)]
         try process.run()
         keepAwakeProcess = process
+        return true
+    }
+
+    private static func stopKeepAwake() {
+        keepAwakeProcess?.terminate()
+        keepAwakeProcess = nil
+    }
+
+    private static func suspendUserSession() throws {
+        let legacyCGSessionPath = "/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession"
+        if FileManager.default.isExecutableFile(atPath: legacyCGSessionPath) {
+            try runProcess(legacyCGSessionPath, arguments: ["-suspend"])
+            return
+        }
+
+        try runProcess("/usr/bin/pmset", arguments: ["displaysleepnow"])
+    }
+
+    private static func runProcess(_ launchPath: String, arguments: [String]) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: launchPath)
+        process.arguments = arguments
+        try process.run()
     }
 
     private static func parseActivePowerSource(output: String) -> String? {

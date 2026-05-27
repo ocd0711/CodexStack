@@ -439,14 +439,23 @@ struct UsageMetricsService {
     private func loadAccountUsageProfiles(codexRoot: URL) -> [AccountUsageProfile] {
         guard let usageURL = resolveUsageURL(codexRoot: codexRoot) else { return [] }
         let credentials = loadOAuthCredentials(codexRoot: codexRoot) + loadImportedOAuthCredentials()
-        return credentials.compactMap { loadUsageProfile(usageURL: usageURL, credentials: $0) }
+        return credentials.compactMap { loadUsageProfile(usageURL: usageURL, credentials: $0, codexRoot: codexRoot) }
     }
 
-    private func loadUsageProfile(usageURL: URL, credentials: OAuthCredentials) -> AccountUsageProfile? {
+    private func loadUsageProfile(usageURL: URL, credentials: OAuthCredentials, codexRoot: URL) -> AccountUsageProfile? {
         guard !credentials.disabled else { return nil }
-        let fetchResult = credentials.isExpired ? (nil, true) : fetchCodexUsage(usageURL: usageURL, credentials: credentials)
+        var credentials = refreshedCredentialsIfNeeded(credentials, codexRoot: codexRoot)
+        var fetchResult = fetchCodexUsage(usageURL: usageURL, credentials: credentials)
+        if fetchResult.1,
+           let refreshToken = credentials.refreshToken,
+           !refreshToken.isEmpty,
+           let refreshed = refreshOAuthCredentials(credentials, refreshToken: refreshToken) {
+            persistRefreshedCredentials(refreshed, original: credentials, codexRoot: codexRoot)
+            credentials = refreshed
+            fetchResult = fetchCodexUsage(usageURL: usageURL, credentials: credentials)
+        }
         let response = fetchResult.0
-        let isUnauthorized = fetchResult.1 || credentials.isExpired
+        let isUnauthorized = fetchResult.1
 
         let jwtPayload = credentials.idToken.flatMap(parseJWT)
         let accessPayload = parseJWT(credentials.accessToken)
@@ -499,6 +508,105 @@ struct UsageMetricsService {
             return nil
         }
         return profile
+    }
+
+    private func refreshedCredentialsIfNeeded(_ credentials: OAuthCredentials, codexRoot: URL) -> OAuthCredentials {
+        guard credentials.isExpired,
+              let refreshToken = credentials.refreshToken,
+              !refreshToken.isEmpty,
+              let refreshed = refreshOAuthCredentials(credentials, refreshToken: refreshToken) else {
+            return credentials
+        }
+        persistRefreshedCredentials(refreshed, original: credentials, codexRoot: codexRoot)
+        return refreshed
+    }
+
+    private func refreshOAuthCredentials(_ credentials: OAuthCredentials, refreshToken: String) -> OAuthCredentials? {
+        let tokenURL = URL(string: "https://auth.openai.com/oauth/token")
+        guard let tokenURL else { return nil }
+
+        var request = URLRequest(url: tokenURL)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 6
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = formURLEncodedBody([
+            "grant_type": "refresh_token",
+            "refresh_token": refreshToken,
+            "client_id": oauthClientID(for: credentials)
+        ])
+
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 6
+        config.timeoutIntervalForResource = 6
+        let session = URLSession(configuration: config)
+        let semaphore = DispatchSemaphore(value: 0)
+        var tokenResponse: OAuthRefreshResponse?
+
+        let task = session.dataTask(with: request) { data, response, _ in
+            defer { semaphore.signal() }
+            guard let http = response as? HTTPURLResponse,
+                  (200...299).contains(http.statusCode),
+                  let data else {
+                return
+            }
+            tokenResponse = try? JSONDecoder().decode(OAuthRefreshResponse.self, from: data)
+        }
+        task.resume()
+
+        if semaphore.wait(timeout: .now() + 6.5) == .timedOut {
+            task.cancel()
+            return nil
+        }
+
+        guard let tokenResponse else { return nil }
+        let accessToken = tokenResponse.accessToken
+        let idToken = tokenResponse.idToken ?? credentials.idToken
+        let newRefreshToken = tokenResponse.refreshToken ?? refreshToken
+        let accessPayload = parseJWT(accessToken)
+        let idPayload = idToken.flatMap(parseJWT)
+        let authDetails = (idPayload?["https://api.openai.com/auth"] as? [String: Any])
+            ?? (accessPayload?["https://api.openai.com/auth"] as? [String: Any])
+        let profile = (idPayload?["https://api.openai.com/profile"] as? [String: Any])
+            ?? (accessPayload?["https://api.openai.com/profile"] as? [String: Any])
+        let expiresAt = tokenResponse.expiresIn.map { Date().addingTimeInterval(TimeInterval($0)) }
+            ?? jwtExpiration(accessPayload)
+            ?? jwtExpiration(idPayload)
+
+        return OAuthCredentials(
+            id: normalizedString(authDetails?["chatgpt_account_id"] as? String)
+                ?? normalizedString(profile?["email"] as? String)
+                ?? credentials.id,
+            accessToken: accessToken,
+            idToken: idToken,
+            refreshToken: newRefreshToken,
+            accountId: normalizedString(authDetails?["chatgpt_account_id"] as? String) ?? credentials.accountId,
+            email: credentials.email
+                ?? normalizedString(profile?["email"] as? String)
+                ?? normalizedString(idPayload?["email"] as? String)
+                ?? normalizedString(accessPayload?["email"] as? String),
+            note: credentials.note,
+            expiresAt: expiresAt,
+            lastRefreshAt: Date(),
+            importedAt: credentials.importedAt,
+            disabled: credentials.disabled,
+            isCurrentCodexAccount: credentials.isCurrentCodexAccount
+        )
+    }
+
+    private func persistRefreshedCredentials(_ refreshed: OAuthCredentials, original: OAuthCredentials, codexRoot: URL) {
+        if original.isCurrentCodexAccount {
+            persistCurrentAuth(refreshed, codexRoot: codexRoot)
+        } else {
+            try? AccountCredentialStore.updateTokens(
+                id: original.id,
+                accessToken: refreshed.accessToken,
+                idToken: refreshed.idToken,
+                refreshToken: refreshed.refreshToken,
+                expiresAt: refreshed.expiresAt,
+                lastRefreshAt: refreshed.lastRefreshAt ?? Date()
+            )
+        }
     }
 
     private func dedupedAccountProfiles(_ profiles: [AccountUsageProfile]) -> [AccountUsageProfile] {
@@ -626,50 +734,7 @@ struct UsageMetricsService {
     }
 
     private func resolveUsageURL(codexRoot: URL) -> URL? {
-        let configURL = codexRoot.appending(path: "config.toml")
-        let configContents = try? String(contentsOf: configURL, encoding: .utf8)
-        let base = parseChatGPTBaseURL(from: configContents) ?? "https://chatgpt.com/backend-api/"
-        let normalized = normalizeChatGPTBaseURL(base)
-        let path = normalized.contains("/backend-api") ? "/wham/usage" : "/api/codex/usage"
-        return URL(string: normalized + path)
-    }
-
-    private func normalizeChatGPTBaseURL(_ value: String) -> String {
-        var trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            trimmed = "https://chatgpt.com/backend-api/"
-        }
-        while trimmed.hasSuffix("/") {
-            trimmed.removeLast()
-        }
-        if (trimmed.hasPrefix("https://chatgpt.com") || trimmed.hasPrefix("https://chat.openai.com")) &&
-            !trimmed.contains("/backend-api") {
-            trimmed += "/backend-api"
-        }
-        return trimmed
-    }
-
-    private func parseChatGPTBaseURL(from configContents: String?) -> String? {
-        guard let configContents else { return nil }
-        for rawLine in configContents.split(whereSeparator: \.isNewline) {
-            let line = rawLine.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: true).first
-            let trimmed = line?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !trimmed.isEmpty else { continue }
-            let parts = trimmed.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: true)
-            guard parts.count == 2 else { continue }
-
-            let key = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-            guard key == "chatgpt_base_url" else { continue }
-
-            var value = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
-            if value.hasPrefix("\""), value.hasSuffix("\"") {
-                value = String(value.dropFirst().dropLast())
-            } else if value.hasPrefix("'"), value.hasSuffix("'") {
-                value = String(value.dropFirst().dropLast())
-            }
-            return value.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return nil
+        URL(string: "https://chatgpt.com/backend-api/wham/usage")
     }
 
     private func fetchCodexUsage(usageURL: URL, credentials: OAuthCredentials) -> (CodexUsageAPIResponse?, Bool) {
@@ -714,6 +779,57 @@ struct UsageMetricsService {
         return (decoded, isUnauthorized)
     }
 
+    private func formURLEncodedBody(_ values: [String: String]) -> Data {
+        let body = values
+            .map { key, value in
+                "\(formEscape(key))=\(formEscape(value))"
+            }
+            .joined(separator: "&")
+        return Data(body.utf8)
+    }
+
+    private func formEscape(_ value: String) -> String {
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.remove(charactersIn: "&+=?")
+        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+    }
+
+    private func oauthClientID(for credentials: OAuthCredentials) -> String {
+        let payloads = [parseJWT(credentials.accessToken), credentials.idToken.flatMap(parseJWT)]
+        for payload in payloads {
+            if let clientID = normalizedString(payload?["client_id"] as? String) {
+                return clientID
+            }
+        }
+        return "app_EMoamEEZ73f0CkXaXp7hrann"
+    }
+
+    private func persistCurrentAuth(_ credentials: OAuthCredentials, codexRoot: URL) {
+        let authURL = codexRoot.appending(path: "auth.json")
+        guard let data = try? Data(contentsOf: authURL),
+              var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return
+        }
+
+        var tokens = (root["tokens"] as? [String: Any]) ?? [:]
+        tokens["access_token"] = credentials.accessToken
+        if let idToken = credentials.idToken {
+            tokens["id_token"] = idToken
+        }
+        if let refreshToken = credentials.refreshToken {
+            tokens["refresh_token"] = refreshToken
+        }
+        root["tokens"] = tokens
+
+        if let encoded = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys]) {
+            try? encoded.write(to: authURL, options: .atomic)
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: NSNumber(value: Int16(0o600))],
+                ofItemAtPath: authURL.path
+            )
+        }
+    }
+
     private func loadOAuthCredentials(codexRoot: URL) -> [OAuthCredentials] {
         let authURL = codexRoot.appending(path: "auth.json")
         guard let data = try? Data(contentsOf: authURL),
@@ -727,6 +843,7 @@ struct UsageMetricsService {
                     id: "codex-api-key",
                     accessToken: apiKey,
                     idToken: nil,
+                    refreshToken: nil,
                     accountId: nil,
                     email: nil,
                     note: "Codex auth.json",
@@ -765,6 +882,7 @@ struct UsageMetricsService {
                 id: accountID ?? email ?? "codex-auth-json",
                 accessToken: accessToken,
                 idToken: idToken,
+                refreshToken: normalizedString(tokens["refresh_token"] as? String ?? tokens["refreshToken"] as? String),
                 accountId: accountID,
                 email: email,
                 note: "Codex auth.json",
@@ -783,6 +901,7 @@ struct UsageMetricsService {
                 id: account.id,
                 accessToken: account.accessToken,
                 idToken: account.idToken,
+                refreshToken: account.refreshToken,
                 accountId: account.accountID,
                 email: account.email,
                 note: account.note,
@@ -1238,6 +1357,7 @@ private struct OAuthCredentials {
     let id: String
     let accessToken: String
     let idToken: String?
+    let refreshToken: String?
     let accountId: String?
     let email: String?
     let note: String?
@@ -1262,6 +1382,20 @@ private struct CodexUsageAPIResponse: Decodable {
         case planType = "plan_type"
         case rateLimit = "rate_limit"
         case credits
+    }
+}
+
+private struct OAuthRefreshResponse: Decodable {
+    let accessToken: String
+    let idToken: String?
+    let refreshToken: String?
+    let expiresIn: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case accessToken = "access_token"
+        case idToken = "id_token"
+        case refreshToken = "refresh_token"
+        case expiresIn = "expires_in"
     }
 }
 

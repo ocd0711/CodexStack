@@ -242,6 +242,8 @@
 "Show a macOS notification when an automatic switch occurs." = "自动切换发生时显示 macOS 通知。";
 "Some accounts could not be imported" = "部分账号无法导入";
 "Sort" = "排序";
+"Stop Awake" = "停止保活";
+"Stop keeping macOS awake in the background." = "停止保持 macOS 后台唤醒。";
 "Switch when the current account's 5h session limit reaches this percentage." = "当前账号 5 小时会话额度达到该百分比时切换。";
 "Switch when the current account's weekly limit reaches this percentage." = "当前账号每周额度达到该百分比时切换。";
 "Switched to account %@ because current usage reached %.0f%%." = "当前用量已达到 %.0f%%，已切换到账号 %@。";

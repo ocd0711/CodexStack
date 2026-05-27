@@ -82,6 +82,33 @@ enum AccountCredentialStore {
         try save(accounts)
     }
 
+    static func updateTokens(
+        id: String,
+        accessToken: String,
+        idToken: String?,
+        refreshToken: String?,
+        expiresAt: Date?,
+        lastRefreshAt: Date
+    ) throws {
+        var accounts = loadAccounts()
+        guard let index = accounts.firstIndex(where: { $0.id == id }) else { return }
+        let current = accounts[index]
+        accounts[index] = ImportedCodexAccount(
+            id: current.id,
+            accountID: current.accountID,
+            email: current.email,
+            note: current.note,
+            type: current.type,
+            accessToken: accessToken,
+            idToken: idToken ?? current.idToken,
+            refreshToken: refreshToken ?? current.refreshToken,
+            expiresAt: expiresAt,
+            lastRefreshAt: lastRefreshAt,
+            importedAt: current.importedAt
+        )
+        try save(accounts)
+    }
+
     private static func save(_ accounts: [ImportedCodexAccount]) throws {
         try FileManager.default.createDirectory(
             at: storeURL.deletingLastPathComponent(),

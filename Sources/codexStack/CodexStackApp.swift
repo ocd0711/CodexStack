@@ -256,6 +256,7 @@ private struct MenuBarPanel: View {
     @State private var hoverDetailPane = false
     @State private var closePaneTask: Task<Void, Never>?
     @State private var lockScreenError: String?
+    @State private var isKeepingAwake = PowerManagementService.isKeepingAwake
     @AppStorage("accountsSortOption") private var accountsSortRaw: String = AccountsSortOption.importedNewest.rawValue
     @AppStorage("accountsManualOrder") private var accountsManualOrderRaw: String = ""
     @AppStorage("accountsPinActive") private var accountsPinActive: Bool = false
@@ -876,8 +877,14 @@ private struct MenuBarPanel: View {
                 Task { await ModelPricingSyncService.shared.syncPrices() }
             }
             .disabled(store.isBusy)
-            actionButton("Lock", icon: "lock", help: "Lock macOS and keep Codex sessions awake in the background.") {
-                lockScreenKeepingAwake()
+            if isKeepingAwake {
+                actionButton("Stop Awake", icon: "stop.circle", help: "Stop keeping macOS awake in the background.") {
+                    stopKeepingAwake()
+                }
+            } else {
+                actionButton("Lock", icon: "lock", help: "Lock macOS and keep Codex sessions awake in the background.") {
+                    lockScreenKeepingAwake()
+                }
             }
             actionButton("Settings", icon: "gearshape") {
                 activePane = .none
@@ -890,6 +897,9 @@ private struct MenuBarPanel: View {
             }
         }
         .disabled(store.isMutating)
+        .onAppear {
+            isKeepingAwake = PowerManagementService.isKeepingAwake
+        }
     }
 
     private func actionButton(
@@ -917,10 +927,16 @@ private struct MenuBarPanel: View {
     private func lockScreenKeepingAwake() {
         do {
             try PowerManagementService.lockScreenKeepingAwake()
+            isKeepingAwake = PowerManagementService.isKeepingAwake
             dismiss()
         } catch {
             lockScreenError = error.localizedDescription
         }
+    }
+
+    private func stopKeepingAwake() {
+        PowerManagementService.stopKeepingAwake()
+        isKeepingAwake = false
     }
 
     private var recentProjectLabels: [String] {

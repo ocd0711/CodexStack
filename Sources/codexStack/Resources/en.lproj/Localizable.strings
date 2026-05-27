@@ -242,6 +242,8 @@
 "Show a macOS notification when an automatic switch occurs." = "Show a macOS notification when an automatic switch occurs.";
 "Some accounts could not be imported" = "Some accounts could not be imported";
 "Sort" = "Sort";
+"Stop Awake" = "Stop Awake";
+"Stop keeping macOS awake in the background." = "Stop keeping macOS awake in the background.";
 "Switch when the current account's 5h session limit reaches this percentage." = "Switch when the current account's 5h session limit reaches this percentage.";
 "Switch when the current account's weekly limit reaches this percentage." = "Switch when the current account's weekly limit reaches this percentage.";
 "Switched to account %@ because current usage reached %.0f%%." = "Switched to account %@ because current usage reached %.0f%%.";
